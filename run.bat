@@ -5,13 +5,9 @@ cd /d "%~dp0"
 where python >nul 2>nul || (echo Python was not found. Install Python 3.12+ and try again. & pause & exit /b 1)
 where npm >nul 2>nul || (echo Node.js/npm was not found. Install Node 20+ and try again. & pause & exit /b 1)
 
-if not exist "agents\.venv" goto install
-if not exist "backend\.venv" goto install
-if not exist "committee-report-assistant\node_modules" goto install
-goto start
-
-:install
-echo Installing packages (first time only, a few minutes)...
+rem Installing is safe to repeat: when everything is already installed it only takes a few seconds,
+rem and it picks up new packages after an update.
+echo Installing / checking packages (first time takes a few minutes)...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-all.ps1" -Install
 if errorlevel 1 (echo Install failed. See messages above. & pause & exit /b 1)
 

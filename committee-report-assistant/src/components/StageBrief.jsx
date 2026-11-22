@@ -326,7 +326,7 @@ export default function StageBrief({ ws, assessment, setBrief, briefChanged, onS
                 {hints.slice(0, 3).map((h) => <li key={h}><span className="dot" />{h}</li>)}
               </ul>
             )}
-            {ag && <p className="agent-tag"><Sparkles size={12} /> {t('Assessed by the brief agent')}</p>}
+            {ag && <p className="agent-tag"><Sparkles size={12} /> {t(ag.agent?.mode === 'llm' ? 'Assessed by the brief agent (AI)' : 'Assessed by the brief agent')}</p>}
           </section>
 
           <section className="card pad">

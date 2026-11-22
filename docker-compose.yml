@@ -3,6 +3,9 @@ services:
   agents:
     build: ./agents
     ports: ["8002:8002"]
+    env_file:
+      - path: ./agents/.env   # your Foundry settings (optional; without it the rules agent runs)
+        required: false
 
   backend:
     build: ./backend

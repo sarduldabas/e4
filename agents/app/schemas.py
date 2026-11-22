@@ -76,6 +76,8 @@ class AgentInfo(BaseModel):
     name: str
     version: str
     mode: Literal["rules", "llm"]
+    model: str | None = None  # deployment name when mode is "llm"
+    note: str | None = None  # why the model was not used, when the agent fell back to rules
 
 
 class BriefAssessment(BaseModel):

@@ -4,7 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.brief_agent import BriefAgent
-from app.main import app
+from app.config import Settings
+from app.main import create_app
 from app.schemas import BriefAssessRequest, BriefFile
 
 TODAY = date(2026, 11, 22)
@@ -107,7 +108,7 @@ def test_date_rolls_to_next_year_when_already_past():
 
 @pytest.mark.parametrize("lang", ["de", "en"])
 def test_http_endpoint(lang):
-    c = TestClient(app)
+    c = TestClient(create_app(Settings(agent_mode="rules")))
     r = c.post("/v1/brief/assess", json={"lang": lang, "text": "FAKOM on 3 December, dual sourcing for battery cells"})
     assert r.status_code == 200
     body = r.json()

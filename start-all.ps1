@@ -15,6 +15,12 @@ if ($Install) {
   Write-Host 'Install done. Run .\start-all.ps1 to start.'; return
 }
 
+# Stop services from an earlier start so the ports are free (safe when nothing is running).
+foreach ($port in 5173, 8001, 8002) {
+  Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+}
+
 $agents  = "cd '$root\agents'; .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8002 --reload"
 $backend = "cd '$root\backend'; `$env:AGENTS_URL='http://localhost:8002'; .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8001 --reload"
 $front   = "cd '$root\committee-report-assistant'; npm run dev"

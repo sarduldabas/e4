@@ -27,7 +27,7 @@ function useBriefAssessment(brief, lang, enabled) {
       assessBrief(JSON.parse(payload), ctrl.signal)
         .then((a) => { if (!ctrl.signal.aborted) setAssessment(a); })
         .catch(() => { if (!ctrl.signal.aborted) setAssessment(null); });
-    }, 400);
+    }, 800); // a model call per keystroke would be wasteful: wait until the user pauses
     return () => { clearTimeout(timer); ctrl.abort(); };
   }, [payload]);
   return payload && assessment?.lang === lang ? assessment : null;

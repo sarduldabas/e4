@@ -18,7 +18,7 @@ class AgentsError(Exception):
 
 
 class AgentsClient:
-    def __init__(self, base_url: str, timeout: float = 8.0, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, base_url: str, timeout: float = 30.0, transport: httpx.AsyncBaseTransport | None = None):
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
 
     async def aclose(self) -> None:

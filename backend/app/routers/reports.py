@@ -7,25 +7,25 @@ router = APIRouter(prefix="/api/v1", tags=["reports"])
 
 @router.get("/committees", response_model=list[Committee])
 def committees(request: Request):
-    return request.app.state.store.committees()
+    return request.app.state.reports.committees()
 
 
 @router.get("/reports", response_model=list[ReportSummary])
 def list_reports(request: Request):
-    return request.app.state.store.list_reports()
+    return request.app.state.reports.list_reports()
 
 
 @router.post("/reports", response_model=Report, status_code=201)
 def create_report(body: ReportCreate, request: Request):
-    store = request.app.state.store
-    if body.committee_id and not store.committee(body.committee_id):
+    svc = request.app.state.reports
+    if body.committee_id and not svc.committee(body.committee_id):
         raise HTTPException(422, f"Unknown committee '{body.committee_id}'")
-    return store.create_report(body.title, body.committee_id)
+    return svc.create_report(body.title, body.committee_id)
 
 
 @router.get("/reports/{report_id}", response_model=Report)
 def get_report(report_id: str, request: Request):
-    r = request.app.state.store.get_report(report_id)
+    r = request.app.state.reports.get_report(report_id)
     if not r:
         raise HTTPException(404, "Report not found")
     return r
@@ -34,7 +34,7 @@ def get_report(report_id: str, request: Request):
 @router.put("/reports/{report_id}/workspace", response_model=Report,
             summary="Save the front end's brief / analysis / deck state (autosave)")
 def save_workspace(report_id: str, workspace: dict, request: Request):
-    r = request.app.state.store.save_workspace(report_id, workspace)
+    r = request.app.state.reports.save_workspace(report_id, workspace)
     if not r:
         raise HTTPException(404, "Report not found")
     return r
@@ -42,6 +42,6 @@ def save_workspace(report_id: str, workspace: dict, request: Request):
 
 @router.delete("/reports/{report_id}", status_code=204)
 def delete_report(report_id: str, request: Request):
-    if not request.app.state.store.delete_report(report_id):
+    if not request.app.state.reports.delete_report(report_id):
         raise HTTPException(404, "Report not found")
     return Response(status_code=204)

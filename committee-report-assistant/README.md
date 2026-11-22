@@ -26,7 +26,8 @@ Where the backend plugs in (search for these)
 
 Branding
 - `VW_BRANDING.md` explains how to switch to the VW Group colours and fonts without touching anything else.
-  Fill in the URLs in section 1, then give the file to Copilot (prompt in section 6).
+  Give Copilot the Group UI URL in the chat (Task 3 in `../COPILOT_START_HERE.md`) or fill in section 1 yourself; the prompt is in section 6.
+  All paths and commands in that file are relative to this folder.
 
 Language (German default, English switchable)
 - The UI opens in German. The DE | EN toggle sits at the top right of the nav bar (`LangToggle` in `TopBar.jsx`).
@@ -43,8 +44,8 @@ Language (German default, English switchable)
 Backend and speech
 - `src/api.js` is the only file that calls the backend. Base URL: `VITE_API_URL` (default `http://localhost:8001`, see `.env.example`).
 - Stage 1 sends the brief (text, files, links, sources, answers, language) to `POST /api/v1/brief/assess` after 400 ms of quiet.
-  The backend asks the Brief agent and returns the score, 2-3 line summary, hints and up to 3 questions. The two Stage 1 cards show that answer.
-- Offline fallback: if the backend or agent does not answer within 3 s, the cards use the local logic (`briefStrength`, `BRIEF_QUESTIONS`)
+  The request is sent after 800 ms of quiet. The backend asks the Brief agent (language model if configured, else rules) and returns the score, 2-3 line summary, hints and up to 3 questions. The two Stage 1 cards show that answer.
+- Offline fallback: if the backend or agent does not answer within 25 s (the agent may be calling a language model), the cards use the local logic (`briefStrength`, `BRIEF_QUESTIONS`)
   and the front end retries after 15 s. The "Assessed by the brief agent" line only shows when the agent answered.
 - Answers to the three questions are stored as option ids (`approve`, `yes`, `align`, ...), not as display text, so they are the same in German and English.
 - Speech: "Sprechen / Speak" starts `SpeechRecognition` (language de-DE or en-US), shows live text while you talk and restarts itself

@@ -3,6 +3,10 @@
 Audience: GitHub Copilot, or any LLM coding assistant, working in this repository.
 Goal: make the prototype use the Volkswagen Group UI colours and typography. Nothing else changes.
 
+**Where things are:** this file lives in the front-end folder `committee-report-assistant/`. Every path below (`src/styles.css`, `index.html`, ...)
+and every command in section 5 is relative to that folder, not to the repository root. Do `cd committee-report-assistant` first.
+`git diff --stat` shows the same files with the prefix `committee-report-assistant/`. The overall project is described in `COPILOT_START_HERE.md` (repository root, Task 3).
+
 ## 1. Inputs (fill these in before starting)
 
 | What | URL or location |
@@ -77,7 +81,7 @@ Font loading is in `index.html` (Google Fonts link). The font stacks are in the 
 
 ## 5. Checks before finishing
 
-Run from the repository root.
+Run from the front-end folder `committee-report-assistant/`.
 
 ```
 npm install

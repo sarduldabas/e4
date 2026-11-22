@@ -8,20 +8,33 @@ def _env_file() -> None:
     p = Path(".env")
     if not p.exists():
         return
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            os.environ.setdefault(k.strip(), v)
 
 
 @dataclass
 class Settings:
     agents_url: str = "http://localhost:8002"
-    agents_timeout: float = 8.0
+    agents_timeout: float = 30.0
+    agent_run_timeout: float = 180.0  # pipeline agents read whole documents; a model call can take a while
     cors_origins: list[str] = field(default_factory=lambda: [
         "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "null"])
     data_dir: Path = Path("./data")
+    database_url: str | None = None  # default: sqlite file in data_dir; set to a postgresql+psycopg://... URL later
+    allow_web: bool = False  # the web-researcher may fetch public pages only when this is true
+    max_upload_mb: int = 50
+    parallel_sections: int = 4
+    max_analysis_rounds: int = 2
+
+    @property
+    def db_url(self) -> str:
+        return self.database_url or f"sqlite:///{(Path(self.data_dir) / 'coe4.db').resolve().as_posix()}"
 
 
 def load_settings() -> Settings:
@@ -29,7 +42,12 @@ def load_settings() -> Settings:
     s = Settings()
     s.agents_url = os.environ.get("AGENTS_URL", s.agents_url).rstrip("/")
     s.agents_timeout = float(os.environ.get("AGENTS_TIMEOUT_SECONDS", s.agents_timeout))
+    s.agent_run_timeout = float(os.environ.get("AGENT_RUN_TIMEOUT_SECONDS", s.agent_run_timeout))
     if "CORS_ORIGINS" in os.environ:
         s.cors_origins = [o.strip() for o in os.environ["CORS_ORIGINS"].split(",") if o.strip()]
     s.data_dir = Path(os.environ.get("DATA_DIR", str(s.data_dir)))
+    s.database_url = os.environ.get("DATABASE_URL") or None
+    s.allow_web = os.environ.get("ALLOW_WEB", "").lower() in ("1", "true", "yes")
+    s.max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", s.max_upload_mb))
+    s.parallel_sections = int(os.environ.get("PARALLEL_SECTIONS", s.parallel_sections))
     return s

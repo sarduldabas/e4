@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 .env
 backend/data/
+e2e/out/
+sample-data/
+_to_delete/

@@ -1,7 +1,7 @@
 // Client for the backend (FastAPI). The prototype keeps working without it: when the backend or the agents
 // are not reachable, the front end falls back to its built-in local logic.
 const BASE = (import.meta.env?.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
-const TIMEOUT_MS = 3000;
+const TIMEOUT_MS = 25000; // the agent may call a language model (up to ~20 s) before it falls back to its rules
 const RETRY_AFTER_MS = 15000;
 let downUntil = 0; // after a failure, skip the network for a while so the UI does not wait on every keystroke
 

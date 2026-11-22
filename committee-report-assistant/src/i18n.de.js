@@ -2,6 +2,7 @@
 // Formal register (Sie). Keep {tokens}, %QC% and {n} citation markers exactly as in the key.
 export default {
  "Assessed by the brief agent": "Bewertet vom Briefing-Agenten",
+ "Assessed by the brief agent (AI)": "Bewertet vom Briefing-Agenten (KI)",
  "Speech input is not supported in this browser. Please use Chrome or Edge.": "Spracheingabe wird von diesem Browser nicht unterstützt. Bitte nutzen Sie Chrome oder Edge.",
  "Microphone access was blocked. Allow the microphone in your browser and try again.": "Der Mikrofonzugriff wurde blockiert. Erlauben Sie das Mikrofon im Browser und versuchen Sie es erneut.",
  "No microphone found.": "Kein Mikrofon gefunden.",
