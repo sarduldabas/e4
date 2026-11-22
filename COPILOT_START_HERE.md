@@ -169,6 +169,12 @@ azd and, as the last resort, **a browser tab** (`AZURE_ENTRA_BROWSER=true`, the 
 2. `az login` (a browser tab opens; the user picks the VW account). With several directories: `az login --tenant <tenant id>`.
 3. `az account show` must print the account. Do not print or copy access tokens.
 
+**This organisation signs in with a PKI smart card and its PIN through the cloud identity provider.** There is no username or password step. Consequences for you:
+- Never ask for, type or store a username, password or PIN. The user inserts the card and enters the PIN in the browser or the system dialog themselves.
+- Keep `AZURE_ENTRA_BROWSER=true` (the default) and do not switch to username/password, client-secret or device-code sign-in; device-code login may not work with card-based sign-in. `az login` (browser) is the right command.
+- The browser must be the one that can use the smart card (the user's normal browser). If the card dialog does not appear, tell the user to check that the card is inserted and the card software is running.
+- The sign-in needs the user at the keyboard, so it cannot run unattended. Hosting on Foundry later will use a managed identity instead; do not build anything for that now.
+
 If the Azure CLI cannot be installed, skip it: the first model call opens the browser tab by itself and the user clicks the account.
 The sign-in happens once per start of the agents service, on the first model call, and parallel calls wait for it (there is one tab, not many).
 The user must be present to click.
