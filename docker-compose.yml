@@ -1,0 +1,25 @@
+# Three services: front end -> backend -> agents.  Start everything:  docker compose up --build
+services:
+  agents:
+    build: ./agents
+    ports: ["8002:8002"]
+
+  backend:
+    build: ./backend
+    environment:
+      AGENTS_URL: http://agents:8002
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+    ports: ["8001:8001"]
+    volumes: ["backend-data:/data"]
+    depends_on: [agents]
+
+  frontend:
+    build:
+      context: ./committee-report-assistant
+      args:
+        VITE_API_URL: http://localhost:8001   # the browser calls the backend directly
+    ports: ["8080:80"]
+    depends_on: [backend]
+
+volumes:
+  backend-data:
