@@ -1,6 +1,6 @@
 // Live mode: the same product, but every screen works on the real backend (reports, files, agents, deck, audit).
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowRight, ArrowUp, CalendarDays, Check, History, Lock, Mic, ScrollText, Trash2, AlertTriangle, ServerCrash, Cpu } from 'lucide-react';
+import { ArrowUp, Check, History, Lock, Mic, ScrollText, Trash2, AlertTriangle, ServerCrash, Cpu } from 'lucide-react';
 import { t } from '../i18n.js';
 import { Brand, LangToggle } from '../components/TopBar.jsx';
 import ModeToggle from './ModeToggle.jsx';
@@ -8,7 +8,6 @@ import { api } from './client.js';
 import { errText, Spin, useAction, useCase } from './kit.jsx';
 import { fmtDate } from '../data.js';
 
-const daysUntil = (iso) => Math.round((Date.UTC(...iso.split('-').map((x, i) => (i === 1 ? +x - 1 : +x))) - Date.now()) / 864e5);
 import LiveBrief from './LiveBrief.jsx';
 import LiveDraft from './LiveDraft.jsx';
 import LiveAudit from './LiveAudit.jsx';
@@ -94,14 +93,13 @@ const STATE_EN = {
 };
 export const stateLabel = (s) => (t('Language') === 'Sprache' ? STATE_DE : STATE_EN)[s] || s;
 
-// the same home screen as the demo; the committees and the reports are the real ones from the server
+// the same home screen as the demo; the reports are the real ones from the server
 function LiveHome({ onOpen, toast, lang, setLang, mode, setMode, st, check }) {
   const [reports, setReports] = useState(null);
-  const [committees, setCommittees] = useState([]);
   const [text, setText] = useState('');
   const [busy, run] = useAction(toast);
   const load = useCallback(() => api.reports().then(setReports).catch((e) => { setReports([]); toast(errText(e), 'warn'); }), [toast]);
-  useEffect(() => { load(); api.committees().then(setCommittees).catch(() => {}); }, [load]);
+  useEffect(() => { load(); }, [load]);
   const create = (opts = {}) => run('create', async () => {
     const txt = (opts.text || '').trim();
     const title = txt ? (txt.length > 64 ? `${txt.slice(0, 61).trim()}…` : txt) : t('New committee report');
@@ -111,7 +109,6 @@ function LiveHome({ onOpen, toast, lang, setLang, mode, setMode, st, check }) {
   });
   const hour = new Date().getHours();
   const greeting = hour < 11 ? t('Good morning') : hour < 18 ? t('Good afternoon') : t('Good evening');
-  const mine = (c) => (reports || []).find((r) => r.committee === c.name);
   return (
     <>
       <header className="topbar plain"><div className="topbar-in">
@@ -131,30 +128,6 @@ function LiveHome({ onOpen, toast, lang, setLang, mode, setMode, st, check }) {
             <button type="submit" className="round solid" disabled={!!busy || st === null} aria-label={t('Start report')}>{busy === 'create' ? <Spin /> : <ArrowUp size={20} />}</button>
           </form>
         </section>
-
-        {committees.length > 0 && (
-          <section className="home-section">
-            <div className="sec-head"><h2>{t('Upcoming committees')}</h2></div>
-            <div className="cmt-grid">
-              {committees.map((c) => {
-                const d = daysUntil(c.date);
-                const r = mine(c);
-                return (
-                  <article key={c.id} className="cmt-card">
-                    <div className="cmt-top">
-                      <span className="cmt-date"><CalendarDays size={15} /> {fmtDate(c.date)}</span>
-                      {d >= 0 && <span className={`due${d < 14 ? ' soon' : ''}`}>{t('in {d} days', { d })}</span>}
-                    </div>
-                    <h3>{c.name}</h3>
-                    <p className="muted">{c.template}</p>
-                    {r ? <button className="link-btn" onClick={() => onOpen(r.id)}>{t('Continue report')} <ArrowRight size={15} /></button>
-                      : <button className="link-btn" disabled={!!busy} onClick={() => create({ committeeId: c.id })}>{t('Start report')} <ArrowRight size={15} /></button>}
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        )}
 
         <section className="home-section">
           <div className="sec-head"><h2>{t('Your reports')}</h2><span className="muted">{reports ? t('{n} reports', { n: reports.length }) : ''}</span></div>

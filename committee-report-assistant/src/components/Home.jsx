@@ -1,7 +1,7 @@
 import { t } from '../i18n.js';
 import { useState } from 'react';
-import { ArrowUp, Mic, CalendarDays, ArrowRight } from 'lucide-react';
-import { COMMITTEES, REPORTS, daysUntil, fmtDate, USER } from '../data.js';
+import { ArrowUp, Mic } from 'lucide-react';
+import { REPORTS, fmtDate, USER } from '../data.js';
 import { Avatars } from './ui.jsx';
 
 const STATUS_CLASS = { Draft: 'draft', Presented: 'presented', Decided: 'decided' };
@@ -28,30 +28,6 @@ export default function Home({ onNew, onOpen, draft, onResume }) {
           <button type="button" className="round ghost" onClick={() => onNew({ text: '', autoVoice: true })} aria-label={t("Start by speaking")} title={t("Start by speaking")}><Mic size={20} /></button>
           <button type="submit" className="round solid" aria-label={t("Start report")}><ArrowUp size={20} /></button>
         </form>
-      </section>
-
-      <section className="home-section">
-        <div className="sec-head"><h2>{t("Upcoming committees")}</h2><span className="muted">{t("Synced from your calendar")}</span></div>
-        <div className="cmt-grid">
-          {COMMITTEES.map((c) => {
-            const d = daysUntil(c.date);
-            return (
-              <article key={c.id} className="cmt-card">
-                <div className="cmt-top">
-                  <span className="cmt-date"><CalendarDays size={15} /> {fmtDate(c.date)}</span>
-                  <span className={`due${d < 14 ? ' soon' : ''}`}>{t('in {d} days', { d })}</span>
-                </div>
-                <h3>{t(c.name)}</h3>
-                <p className="muted">{t(c.template)}</p>
-                {c.hasReport ? (
-                  <button className="link-btn" onClick={() => onOpen(REPORTS[0])}>{t("Continue report v2")} <ArrowRight size={15} /></button>
-                ) : (
-                  <button className="link-btn" onClick={() => onNew({ committeeId: c.id })}>{t("Start report")} <ArrowRight size={15} /></button>
-                )}
-              </article>
-            );
-          })}
-        </div>
       </section>
 
       <section className="home-section">
