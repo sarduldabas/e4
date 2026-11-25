@@ -477,14 +477,14 @@ blockquote { padding: 14px 16px; border-left: 3px solid var(--accent); backgroun
 .thumb.on .t-n { color: var(--accent); font-weight: 600; }
 .t-pres { position: absolute; right: -6px; bottom: -6px; }
 .t-stale { position: absolute; top: 4px; right: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px #fff; }
-.canvas-col { min-width: 0; }
+.canvas-col { min-width: 0; position: sticky; top: 92px; align-self: start; } /* the slide stays in view while the side panel (Ask AI chat, checks, notes) scrolls */
 .canvas-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .tpl { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); padding: 5px 12px; border-radius: 999px; }
 .canvas { border-radius: 14px; overflow: hidden; box-shadow: var(--shadow-2); border: 1px solid var(--line); background: #fff; }
 .canvas-hint { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-3); margin-top: 12px; }
 .slide-src { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
 .src-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
-.panel { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 92px; }
+.panel { display: flex; flex-direction: column; gap: 16px; }
 .panel h2 { font-size: 16px; margin-bottom: 12px; }
 .panel .card-head h2 { margin: 0; }
 .working { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 13.5px; color: var(--ink-2); }
@@ -613,6 +613,7 @@ textarea.notes { height: auto; padding: 10px 14px; line-height: 1.5; resize: ver
   .an-grid { grid-template-columns: minmax(0, 1fr) 340px; }
   .an-nav { display: none; }
   .rep-grid { grid-template-columns: 150px minmax(0, 1fr); }
+  .canvas-col { position: static; }
   .panel { grid-column: 1 / -1; position: static; display: grid; grid-template-columns: repeat(3, 1fr); }
   .tb-right .secure { display: none; }
 }
