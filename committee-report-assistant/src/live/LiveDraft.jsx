@@ -7,16 +7,11 @@ import { t } from '../i18n.js';
 import { api, saveBlob } from './client.js';
 import { Empty, errText, Spin, useAction } from './kit.jsx';
 import { ActionBar, SourceIcon } from '../components/ui.jsx';
+import AskAI, { useThread } from '../components/AskAI.jsx';
 import { ImageLibrary, ResearchPlan, Running, Sources } from './LiveMaterial.jsx';
 import SlideCanvas from './SlideCanvas.jsx';
 
 const isSystem = (s) => s.section_key.startsWith('_');
-
-const SUGGEST = {
-  slide: ['Make the text shorter', 'Make the title a clear statement', 'Add a speaker note'],
-  section: ['Go into more detail on cost', 'Shorter, for senior management', 'Add the risks'],
-  deck: ['Shorter overall, for senior management', 'More focus on the decision', 'Remove the appendix details'],
-};
 
 // ------------------------------------------------------------------------------------------ what needs a look (the demo's "checks" card)
 function Checks({ items, rid, toast, reload, load, onJump }) {
@@ -96,12 +91,12 @@ function Editor({ rid, c, reload, layouts, lang, toast }) {
   const [sel, setSel] = useState(null);
   const [drawer, setDrawer] = useState(false);
   const [scope, setScope] = useState('slide');
-  const [text, setText] = useState('');
   const [result, setResult] = useState({});
   const [dismissed, setDismissed] = useState(null);
   const [why, setWhy] = useState(false);
   const [present, setPresent] = useState(false);
   const [busy, run] = useAction(toast);
+  const [thread, addMsg, updateMsg] = useThread();
   const drag = useRef(null);
   const job = c.job;
   const working = !!job && ['queued', 'running'].includes(job.status);
@@ -129,22 +124,35 @@ function Editor({ rid, c, reload, layouts, lang, toast }) {
       setResult((x) => ({ ...x, [slide.id]: { ...(x[slide.id] || {}), warnings: r.warnings } }));
     }).then(() => load(true));
   };
-  const ask = (override) => run('ask', async () => {
-    const q = (override ?? text).trim();
-    const r = await api.ask(rid, { text: q, scope, slide_id: slide?.id || null, section_key: slide && !isSystem(slide) ? slide.section_key : null });
-    if (r.mode === 'slide') {
-      patchLocal(slide.id, (s) => ({ ...s, spec: r.spec, title: r.spec.title, can_undo: r.changed || s.can_undo }));
-      setResult((x) => ({ ...x, [slide.id]: { summary: r.summary, needs: r.needs, warnings: r.warnings, changed: r.changed } }));
-      if (r.changed) setText('');
-      await load(true);
-    } else if (r.mode === 'job') {
-      setText(''); setResult((x) => ({ ...x, [slide?.id]: { summary: t('Working on: {s}', { s: r.sections.join(', ') }), changed: true, needs: r.manual?.length ? [t('Reordering: drag the slides in the list on the left.')] : [] } }));
-      await reload();
-    } else {
-      setResult((x) => ({ ...x, [slide?.id]: { summary: r.clarification || t('Nothing was changed. Say which slide or section you mean.'), changed: false, needs: (r.manual || []).length ? [t('Reordering: drag the slides in the list on the left.')] : [] } }));
-    }
+  const manualNote = (r) => ((r.manual || []).length ? [t('Reordering: drag the slides in the list on the left.')] : []);
+  const undoSlideFor = (slideId, msgId) => () => run('undo', async () => {
+    const r = await api.undoSlide(rid, slideId);
+    patchLocal(slideId, (s) => ({ ...s, spec: r.spec, title: r.spec.title }));
+    updateMsg(msgId, { undo: null, undone: true });
+    await load(true);
   });
-  const undoSlide = () => run('undo', async () => { const r = await api.undoSlide(rid, slide.id); patchLocal(slide.id, (s) => ({ ...s, spec: r.spec, title: r.spec.title })); setResult((x) => ({ ...x, [slide.id]: undefined })); await load(true); });
+  const ask = (q) => {
+    const sl = slide;
+    const id = addMsg({ text: q, tag: scopeLabel[scope], pending: true });
+    return run('ask', async () => {
+      try {
+        const r = await api.ask(rid, { text: q, scope, slide_id: sl?.id || null, section_key: sl && !isSystem(sl) ? sl.section_key : null });
+        if (r.mode === 'slide') {
+          patchLocal(sl.id, (x) => ({ ...x, spec: r.spec, title: r.spec.title, can_undo: r.changed || x.can_undo }));
+          const reply = r.summary || (r.changed ? t('Done.') : (r.needs || [])[0] || t('Nothing was changed.'));
+          updateMsg(id, { pending: false, tone: r.changed ? 'ok' : 'warn', reply, notes: [...(r.needs || []), ...(r.warnings || [])].filter((n) => n !== reply), undo: r.changed ? undoSlideFor(sl.id, id) : null });
+          await load(true);
+        } else if (r.mode === 'job') {
+          updateMsg(id, { pending: false, reply: t('Working on: {s}', { s: r.sections.join(', ') }), notes: manualNote(r) });
+          await reload();
+        } else {
+          updateMsg(id, { pending: false, tone: 'warn', reply: r.clarification || t('Nothing was changed. Say which slide or section you mean.'), notes: manualNote(r) });
+        }
+      } catch (e) {
+        updateMsg(id, { pending: false, tone: 'warn', reply: errText(e) });
+      }
+    });
+  };
   const undoAi = () => run('undoai', async () => { await api.undoAsk(rid); await Promise.all([load(true), reload()]); toast(t('Undone.')); });
   const add = (layout = 'bullets') => run('add', async () => { const r = await api.addSlide(rid, slide?.id || null, layout); await load(); setSel(r.id); });
   const del = () => window.confirm(t('Delete this slide?')) && run('del', async () => { await api.deleteSlide(rid, slide.id); await load(); });
@@ -202,6 +210,7 @@ function Editor({ rid, c, reload, layouts, lang, toast }) {
             </div>
           </div>
           <p className="canvas-hint"><Info size={13} /> {slide.locked ? t('This slide is generated from the others and cannot be edited.') : editable ? t('Click any text on the slide to edit it.') : t('The draft is being updated; editing is back in a moment.')}</p>
+          {res?.warnings?.map((n, i) => <p key={i} className="canvas-hint"><AlertTriangle size={13} /> {n}</p>)}
           {sources.length > 0 && (
             <div className="slide-src">
               <span className="muted small">{t('Sources on this slide')}</span>
@@ -213,25 +222,16 @@ function Editor({ rid, c, reload, layouts, lang, toast }) {
         </main>
 
         <aside className="panel">
-          <section className="card pad">
-            <div className="ask-head"><h2><Sparkles size={15} /> {t('Ask AI')}</h2>
-              <div className="seg sm" role="radiogroup" aria-label={t('What should AI change?')}>
-                {['slide', 'section', 'deck'].map((k) => <button key={k} type="button" role="radio" aria-checked={scope === k} className={scope === k ? 'on' : ''} disabled={k === 'section' && isSystem(slide)} onClick={() => setScope(k)}>{scopeLabel[k]}</button>)}
-              </div>
-            </div>
-            <form className="chat-in" onSubmit={(e) => { e.preventDefault(); if (text.trim().length > 2) ask(); }}>
-              <input value={text} disabled={!editable || (scope === 'slide' && slide.locked)} onChange={(e) => setText(e.target.value)} aria-label={t('Ask AI')}
-                placeholder={scope === 'slide' ? t('What should change on this slide?') : scope === 'section' ? t('What should change in “{s}”?', { s: slide.section }) : t('What should change in the whole deck?')} />
-              <button className="round solid sm" aria-label={t('Send')} disabled={!editable || !!busy || text.trim().length < 3}><Send size={15} /></button>
-            </form>
-            <div className="chips">{SUGGEST[scope].map((x) => <button key={x} type="button" className="opt" disabled={!editable} onClick={() => ask(t(x))}>{t(x)}</button>)}</div>
-            {busy === 'ask' && <p className="working"><Loader2 size={14} className="spin" /> {t('Working…')}</p>}
-            {scope !== 'slide' && <p className="muted small">{t('A section or the whole deck is written again from the findings; changes you made by hand in it are replaced. You can undo the last such change.')}</p>}
-            {res?.summary && <p className="logline">{res.changed ? <Check size={13} className="ok" /> : <AlertTriangle size={13} />} {res.summary}{slide.can_undo && scope === 'slide' && res.changed && <button className="textlink" disabled={!editable || !!busy} onClick={undoSlide}><Undo2 size={12} /> {t('Undo')}</button>}</p>}
-            {res?.needs?.map((n, i) => <p key={i} className="logline muted">{n}</p>)}
-            {res?.warnings?.map((n, i) => <p key={i} className="logline"><AlertTriangle size={13} /> {n}</p>)}
-            {deck.ai_undo && <p className="logline"><Undo2 size={13} /> {t('Undo the last AI change')}: “{deck.ai_undo.label}” <button className="textlink" disabled={!editable || !!busy} onClick={undoAi}>{t('Undo')}</button></p>}
-          </section>
+          <AskAI
+            scopes={['slide', 'section', 'deck'].map((k) => ({ key: k, label: scopeLabel[k], disabled: k === 'section' && isSystem(slide) }))}
+            scope={scope} onScope={setScope}
+            target={scope === 'slide' ? t('Slide {n}', { n: idx + 1 }) : scope === 'section' ? t('Section “{s}”', { s: slide.section }) : t('All {n} slides', { n: deck.slides.length })}
+            thread={thread} busy={busy === 'ask'} toast={toast} onSend={ask}
+            disabled={!editable || (scope === 'slide' && slide.locked)}
+            disabledNote={!editable ? t('The draft is being updated; Ask AI is back in a moment.') : scope === 'slide' && slide.locked ? t('This slide is generated from the others; ask on the section or the whole deck instead.') : null}
+            restore={deck.ai_undo ? { label: deck.ai_undo.label, onUndo: undoAi } : null}
+            placeholder={scope === 'slide' ? t('e.g. “Make the three figures easier to compare and cut the second bullet”') : scope === 'section' ? t('e.g. “Go into more detail on the risks and name the cost per option”') : t('e.g. “Shorter overall, for senior management, with more focus on the decision”')}
+          />
 
           <section className="card pad">
             <div className="card-head"><h2>{t('Checks')}</h2><span className={`pill ${attn.length ? 'warn' : 'good'}`}>{attn.length ? t('{n} to look at', { n: attn.length }) : t('All clear')}</span></div>

@@ -1,12 +1,13 @@
 import { t, getLang } from '../i18n.js';
 import { useEffect, useState } from 'react';
 import {
-  Play, Download, ArrowLeft, ChevronLeft, ChevronRight, Check, AlertTriangle, Send, Undo2, Loader2, FileText, Info, Sparkles, X,
+  Play, Download, ArrowLeft, ChevronLeft, ChevronRight, Check, AlertTriangle, Loader2, FileText, Info, X,
 } from 'lucide-react';
 import { SRC, qcText, slideText, slideNotes } from '../data.js';
 import { detect, openItems, reportMeta } from '../workspace.js';
 import { ActionBar, Avatar, Modal, SourceIcon, useInterval } from './ui.jsx';
 import { Slide, SlideFrame } from './Slide.jsx';
+import AskAI, { useThread } from './AskAI.jsx';
 
 const BUILD_STEPS = ['Mapping 7 sections to the committee template', 'Placing 5 charts and the options table', 'Writing speaker notes', 'Checking every figure against the analysis'];
 const shorten = (b) => { const cut = b.search(/[;,(]| – | — /); return cut > 38 ? `${b.slice(0, cut).trim().replace(/[.,;:]$/, '')}.` : b; };
@@ -96,9 +97,8 @@ export default function StageReport({ ws, setDeck, setAnalysis, markDeckStale, o
   const a = ws.analysis;
   const [present, setPresent] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [cmd, setCmd] = useState('');
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState([]);
+  const [thread, addMsg, updateMsg] = useThread();
   const [scope, setScope] = useState('slide');
 
   const qc = qcText(a.qualCost);
@@ -122,24 +122,28 @@ export default function StageReport({ ws, setDeck, setAnalysis, markDeckStale, o
 
   const patchSlide = (id, patch) => setDeck((x) => ({ ...x, slides: x.slides.map((s) => (s.id === id ? { ...s, ...patch } : s)) }));
 
-  const assist = (text) => {
-    const cmdText = (text ?? cmd).trim();
+  const assist = (cmdText) => {
     if (!cmdText || busy || !slide) return;
-    setCmd(''); setBusy(true);
+    setBusy(true);
+    const names = { slide: t('This slide'), section: t('This section'), deck: t('Whole deck') };
+    const id = addMsg({ text: cmdText, tag: names[scope], pending: true });
     const targets = d.slides.filter((x) => (scope === 'deck' ? true : scope === 'section' ? x.sectionId === slide.sectionId : x.id === slide.id));
     const prev = targets.map((x) => ({ id: x.id, bullets: x.bullets, notes: x.notes, title: x.title }));
     setTimeout(() => {
+      const did = new Set();
       targets.forEach((x) => {
         const sq = (q) => slideText(q, x.qcv);
-        if (/short|trim|concise|kürz|kurz|straff/i.test(cmdText)) patchSlide(x.id, { bullets: x.bullets.map((b) => shorten(sq(b))) });
-        else if (/note|notiz/i.test(cmdText)) patchSlide(x.id, { notes: t('Talking points: {p}', { p: x.bullets.map(sq).join(' ') }) });
-        else if (/conclusion|title|titel|aussage/i.test(cmdText)) patchSlide(x.id, { title: sq(x.title).replace(/[.]$/, '') });
+        if (/short|trim|concise|kürz|kurz|straff/i.test(cmdText)) { patchSlide(x.id, { bullets: x.bullets.map((b) => shorten(sq(b))) }); did.add(t('Text shortened')); }
+        else if (/note|notiz/i.test(cmdText)) { patchSlide(x.id, { notes: t('Talking points: {p}', { p: x.bullets.map(sq).join(' ') }) }); did.add(t('Speaker notes added')); }
+        else if (/conclusion|title|titel|aussage/i.test(cmdText)) { patchSlide(x.id, { title: sq(x.title).replace(/[.]$/, '') }); did.add(t('Title turned into a statement')); }
       });
-      setLog((l) => [{ text: cmdText, n: d.active + 1, prev, id: Math.random() }, ...l].slice(0, 3));
+      if (did.size) {
+        const undo = () => { prev.forEach((p) => patchSlide(p.id, { bullets: p.bullets, notes: p.notes, title: p.title })); updateMsg(id, { undo: null, undone: true }); };
+        updateMsg(id, { pending: false, reply: t('Done: {what}.', { what: [...did].join(', ') }), undo });
+      } else updateMsg(id, { pending: false, tone: 'warn', reply: t('This is a demo: I can shorten the text, add speaker notes or turn titles into statements. The live version understands any request.') });
       setBusy(false);
     }, 1100);
   };
-  const undo = (entry) => { entry.prev.forEach((p) => patchSlide(p.id, { bullets: p.bullets, notes: p.notes, title: p.title })); setLog((l) => l.filter((x) => x.id !== entry.id)); };
   const decide = (kind, v) => {
     if (kind === 'qc') { setAnalysis((x) => ({ ...x, qualCost: v })); markDeckStale(['s1', 's4', 's7']); if (v) toast(v === 'range' ? t('Both figures will be shown') : t('Using {qc} everywhere, including summary and recommendation', { qc: qcText(v) })); } else { setAnalysis((x) => ({ ...x, gap: v })); markDeckStale(['s3']); }
     updateSlides();
@@ -197,16 +201,13 @@ export default function StageReport({ ws, setDeck, setAnalysis, markDeckStale, o
         </main>
 
         <aside className="panel">
-          <section className="card pad">
-            <div className="ask-head"><h2><Sparkles size={15} /> {t("Ask AI")}</h2><div className="seg sm" role="radiogroup" aria-label={t("What should AI change?")}>{[['slide', 'This slide'], ['section', 'This section'], ['deck', 'Whole deck']].map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={scope === k} className={scope === k ? 'on' : ''} onClick={() => setScope(k)}>{t(l)}</button>)}</div></div>
-            <form className="chat-in" onSubmit={(e) => { e.preventDefault(); assist(); }}>
-              <input value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder={scope === 'slide' ? t('What should change on this slide?') : scope === 'section' ? t('What should change in this section?') : t('What should change in the whole deck?')} aria-label={t("Ask for a change to this slide")} />
-              <button className="round solid sm" aria-label={t("Send")} disabled={busy}><Send size={15} /></button>
-            </form>
-            <div className="chips">{['Shorten the text', 'Add speaker notes', 'Make the title a conclusion'].map((c) => <button key={c} className="opt" onClick={() => assist(t(c))}>{t(c)}</button>)}</div>
-            {busy && <p className="working"><Loader2 size={14} className="spin" /> {t('Working…')}</p>}
-            {log.map((l) => <p key={l.id} className="logline"><Check size={13} className="ok" /> {t('“{text}”', { text: l.text })} <button className="textlink" onClick={() => undo(l)}><Undo2 size={12} /> {t("Undo")}</button></p>)}
-          </section>
+          <AskAI
+            scopes={[{ key: 'slide', label: t('This slide') }, { key: 'section', label: t('This section') }, { key: 'deck', label: t('Whole deck') }]}
+            scope={scope} onScope={setScope}
+            target={scope === 'slide' ? t('Slide {n}', { n: d.active + 1 }) : scope === 'section' ? t('The section of slide {n}', { n: d.active + 1 }) : t('All {n} slides', { n: d.slides.length })}
+            thread={thread} busy={busy} toast={toast} onSend={assist}
+            placeholder={scope === 'slide' ? t('e.g. “Make the three figures easier to compare and cut the second bullet”') : scope === 'section' ? t('e.g. “Go into more detail on the risks and name the cost per option”') : t('e.g. “Shorter overall, for senior management, with more focus on the decision”')}
+          />
 
           <section className="card pad">
             <div className="card-head"><h2>{t("Needs your attention")}</h2><span className={`pill ${warnCount ? 'warn' : 'good'}`}>{warnCount ? t('{n} to look at', { n: warnCount }) : t('All clear')}</span></div>
