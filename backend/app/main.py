@@ -35,7 +35,7 @@ def create_app(settings: Settings | None = None, agents: AgentsClient | None = N
     ctx = Context.build(db, store, runner, jobs, settings)
     orchestrator = Orchestrator(ctx)
     reports_svc = ReportsService(db, on_delete=orchestrator.purge)
-    reports_svc.seed()
+    reports_svc.seed(settings.seed_sample_reports)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

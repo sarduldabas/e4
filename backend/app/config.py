@@ -39,6 +39,7 @@ class Settings:
     max_extract_chars: int = 900000  # per source; beyond this the passages most relevant to the outline are read first
     passage_chars: int = 60000  # raw text from the sources that the section analyst may read per section
     demo_dir: str = ""
+    seed_sample_reports: bool = False  # SEED_SAMPLE_REPORTS=true adds three empty sample rows to the report list (the committees are always there)
 
     @property
     def db_url(self) -> str:
@@ -56,6 +57,7 @@ def load_settings() -> Settings:
     s.data_dir = Path(os.environ.get("DATA_DIR", str(s.data_dir)))
     s.database_url = os.environ.get("DATABASE_URL") or None
     s.allow_web = os.environ.get("ALLOW_WEB", "true").lower() in ("1", "true", "yes")
+    s.seed_sample_reports = os.environ.get("SEED_SAMPLE_REPORTS", "false").lower() in ("1", "true", "yes")
     s.max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", s.max_upload_mb))
     s.parallel_sections = int(os.environ.get("PARALLEL_SECTIONS", s.parallel_sections))
     s.parallel_calls = int(os.environ.get("PARALLEL_CALLS", s.parallel_calls))

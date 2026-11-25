@@ -18,7 +18,7 @@ ASSESSMENT = {
 
 def make_client(tmp_path, handler):
     agents = AgentsClient("http://agents.test", transport=httpx.MockTransport(handler))
-    app = create_app(Settings(data_dir=tmp_path), agents=agents)
+    app = create_app(Settings(data_dir=tmp_path, seed_sample_reports=True), agents=agents)
     return TestClient(app)
 
 

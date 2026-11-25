@@ -61,3 +61,10 @@ See `.env.example`: services, storage, `ALLOW_WEB`, `GAP_ROUNDS`, `MAX_ASSETS_AN
 - `GET /api/v1/reports/{id}/assets`: every picture, chart and table with the analyst's description, treatment (use / redraw / discard) and the curator's choice
 - `PATCH /api/v1/reports/{id}/assets/{asset_id}`: `user_choice` (`use`, `skip`, null), `section_key`, `caption`
 - `GET /api/v1/reports/{id}/assets/{asset_id}`: the picture itself
+
+## Sample reports
+
+A fresh database starts **empty** in Live mode: only the committees and their dates (master data) are seeded.
+The three sample reports of the Demo are not created. To get them for a local look-around, set
+`SEED_SAMPLE_REPORTS=true` before the first start (an existing database keeps what it has).
+Live mode uses the same screens as Demo; the only difference is that everything comes from the agents and the backend.

@@ -2,10 +2,11 @@
 // on the slide itself or changed by asking AI (one slide, one section or the whole deck), and everything is saved as you go. There is no approval step:
 // the saved draft is the final version, and downloading it is recorded.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, ChevronRight, Download, FileText, Globe, GripVertical, Layers, Lock, Plus, Send, Sparkles, Trash2, Undo2, UserRound, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, ChevronLeft, ChevronRight, Download, FileText, Globe, Info, Layers, Loader2, Play, Plus, Send, Sparkles, Trash2, Undo2, UserRound, X } from 'lucide-react';
 import { t } from '../i18n.js';
 import { api, saveBlob } from './client.js';
-import { errText, Empty, Spin, useAction } from './kit.jsx';
+import { Empty, errText, Spin, useAction } from './kit.jsx';
+import { ActionBar, SourceIcon } from '../components/ui.jsx';
 import { ImageLibrary, ResearchPlan, Running, Sources } from './LiveMaterial.jsx';
 import SlideCanvas from './SlideCanvas.jsx';
 
@@ -17,10 +18,9 @@ const SUGGEST = {
   deck: ['Shorter overall, for senior management', 'More focus on the decision', 'Remove the appendix details'],
 };
 
-// ------------------------------------------------------------------------------------------ what needs a look
-function Attention({ items, deck, rid, toast, reload, load, onJump }) {
+// ------------------------------------------------------------------------------------------ what needs a look (the demo's "checks" card)
+function Checks({ items, rid, toast, reload, load, onJump }) {
   const [busy, run] = useAction(toast);
-  if (!items.length) return <Empty icon={<Check size={22} />} title={t('Nothing needs your attention')}>{t('Every statement on the slides is backed by a source. You can download the draft any time.')}</Empty>;
   const done = (fn) => async () => { await fn(); await Promise.all([load(true), reload()]); };
   const include = (it) => run(it.id, done(async () => {
     const r = await api.includeClaim(rid, it.id);
@@ -30,23 +30,18 @@ function Attention({ items, deck, rid, toast, reload, load, onJump }) {
   const leave = (it) => run(it.id, done(() => api.patchClaim(rid, it.id, { status: 'rejected' })));
   const dismiss = (it) => run(it.id, done(() => api.resolveFlag(rid, it.id, 'dismissed', null)));
   return (
-    <ul className="lv-attn">
+    <ul className="checks">
+      {items.length === 0 && <li className="ok"><Check size={15} /><span>{t('Every statement on the slides is backed by a source.')}</span></li>}
       {items.map((it) => (
-        <li key={`${it.kind}-${it.id}`} className={it.severity}>
-          <div className="lv-attn-h">{it.severity === 'blocker' ? <AlertTriangle size={15} /> : <Sparkles size={15} />}
-            <strong>{it.kind === 'claim' ? t('Left out: not backed by the sources') : it.severity === 'blocker' ? t('Please check') : t('Note')}</strong>
-            {it.section && <span className="muted small">{it.section}</span>}</div>
-          <p>{it.text}</p>
-          {it.issues?.length > 0 && <ul className="lv-issues">{it.issues.map((x, i) => <li key={i}>{x}</li>)}</ul>}
-          <div className="lv-row">
-            {it.slide_id && <button className="btn quiet sm" onClick={() => onJump(it.slide_id)}>{t('Show slide')}</button>}
+        <li key={`${it.kind}-${it.id}`} className="warn">
+          <AlertTriangle size={15} />
+          <span>
+            {it.kind === 'claim' ? <>{t('Left out, not backed by the sources')}: {it.text}{it.issues?.length > 0 && ` (${it.issues.join('; ')})`}</> : <>{it.section ? `${it.section}: ` : ''}{it.text}</>}
+            {' '}{it.slide_id && <button className="textlink" onClick={() => onJump(it.slide_id)}>{t('Show slide')}</button>}
             {it.kind === 'claim' ? (
-              <>
-                <button className="btn sm" disabled={!!busy} onClick={() => include(it)}>{busy === it.id ? <Spin size={13} /> : <Plus size={13} />} {t('Take into the slides')}</button>
-                <button className="btn quiet sm" disabled={!!busy} onClick={() => leave(it)}><X size={13} /> {t('Leave out')}</button>
-              </>
-            ) : <button className="btn sm" disabled={!!busy} onClick={() => dismiss(it)}>{busy === it.id ? <Spin size={13} /> : <Check size={13} />} {t('Got it')}</button>}
-          </div>
+              <> <button className="textlink" disabled={!!busy} onClick={() => include(it)}>{busy === it.id ? t('Working…') : t('Take into the slides')}</button> <button className="textlink" disabled={!!busy} onClick={() => leave(it)}>{t('Leave out')}</button></>
+            ) : <> <button className="textlink" disabled={!!busy} onClick={() => dismiss(it)}>{t('Got it')}</button></>}
+          </span>
         </li>
       ))}
     </ul>
@@ -99,12 +94,13 @@ function Material({ rid, sections, toast, onClose, onApply }) {
 function Editor({ rid, c, reload, layouts, lang, toast }) {
   const [deck, setDeck] = useState(null);
   const [sel, setSel] = useState(null);
-  const [panel, setPanel] = useState('slide');
   const [drawer, setDrawer] = useState(false);
   const [scope, setScope] = useState('slide');
   const [text, setText] = useState('');
   const [result, setResult] = useState({});
   const [dismissed, setDismissed] = useState(null);
+  const [why, setWhy] = useState(false);
+  const [present, setPresent] = useState(false);
   const [busy, run] = useAction(toast);
   const drag = useRef(null);
   const job = c.job;
@@ -155,112 +151,136 @@ function Editor({ rid, c, reload, layouts, lang, toast }) {
   const drop = (to) => { const id = drag.current; drag.current = null; if (id && id !== deck.slides[to]?.id) run('mv', async () => { await api.moveSlide(rid, id, to); await load(true); }); };
   const download = () => run('dl', async () => { const { name, blob } = await api.downloadDeck(rid); saveBlob(blob, name); toast(t('PowerPoint file saved: {n} slides.', { n: deck.export.slides })); });
   const applyPictures = (key) => api.ask(rid, { text: lang === 'de' ? 'Setze die gewählten Bilder und Diagramme dieses Abschnitts neu ein.' : 'Place the chosen pictures and charts of this section again.', scope: 'section', section_key: key }).then(() => reload());
-  const jump = (id) => { setSel(id); setPanel('slide'); };
+  const jump = (id) => setSel(id);
 
   const res = slide ? result[slide.id] : null;
   const attn = deck.attention || [];
   const saving = busy === 'edit';
   const scopeLabel = { slide: t('This slide'), section: t('This section'), deck: t('Whole deck') };
   const failed = job?.status === 'failed' && dismissed !== job.id ? job : null;
+  const sources = slide ? [...new Map(slide.claims.flatMap((cl) => cl.evidence).filter((e) => e.source).map((e) => [e.source, e])).values()] : [];
+  const kindOf = (e) => (e.origin === 'web' ? 'web' : /\.pptx?\b/i.test(e.source) ? 'pptx' : /\.xlsx?\b/i.test(e.source) ? 'xlsx' : 'pdf');
 
   return (
-    <div className="lv-report">
-      <div className="lv-rbar">
-        <div><h1 className="lv-rtitle">{c.title}</h1>
-          <p className="muted small lv-saved">{saving ? <><Spin size={12} /> {t('Saving…')}</> : <><Check size={13} /> {t('Saved automatically')}</>}{deck.template ? ` · ${deck.template}` : ''}</p></div>
-        <div className="lv-rtools">
-          <button className="btn" onClick={() => setDrawer(true)}><Layers size={16} /> {t('Material')}</button>
-          <button className={`btn${attn.length ? ' attn' : ''}`} onClick={() => setPanel(panel === 'attention' ? 'slide' : 'attention')}>{attn.length ? <AlertTriangle size={16} /> : <Check size={16} />} {attn.length ? t('{n} to look at', { n: attn.length }) : t('All clear')}</button>
-          <button className="btn primary" disabled={!!busy || working} onClick={download}>{busy === 'dl' ? <Spin /> : <Download size={16} />} {t('Download PowerPoint')}</button>
+    <div className="stage stage-report">
+      <header className="stage-head compact">
+        <div>
+          <p className="eyebrow">{t('Step 2 · Draft')}</p>
+          <h1 className="display md">{t('Your draft is ready.')} <em>{t('Adjust it, then download.')}</em></h1>
         </div>
-      </div>
-      {deck.export.shared > 0 && <p className="muted small lv-exportnote">{t('The file has {n} slides: short sections that follow each other share a page. You can adjust that in PowerPoint.', { n: deck.export.slides })}</p>}
-      {working && <div className="lv-jobbar" role="status"><Spin size={15} /> <span>{job.progress?.log?.slice(-1)[0] || t('Working…')}</span><span className="muted small">{t('The slides can be edited again when this is done.')}</span></div>}
-      {failed && <div className="lv-banner warn"><AlertTriangle size={20} /><div><strong>{t('The last change could not be made')}</strong><span>{failed.error} {t('Your draft is as it was.')}</span></div><button className="btn sm" onClick={() => setDismissed(failed.id)}>{t('OK')}</button></div>}
+        <span className="muted small">{saving ? <><Spin size={12} /> {t('Saving…')}</> : <><Check size={13} /> {t('Saved automatically')}</>}</span>
+      </header>
 
-      <div className="lv-work">
-        <div className="lv-film" aria-label={t('Slides')}>
+      {working && <div className="banner" role="status"><Loader2 size={18} className="spin" /><div><strong>{job.progress?.log?.slice(-1)[0] || t('Working…')}</strong><span>{t('The slides can be edited again when this is done.')}</span></div></div>}
+      {failed && <div className="banner"><AlertTriangle size={18} /><div><strong>{t('The last change could not be made')}</strong><span>{failed.error} {t('Your draft is as it was.')}</span></div><button className="btn sm" onClick={() => setDismissed(failed.id)}>{t('OK')}</button></div>}
+
+      <div className="rep-grid">
+        <aside className="rail" aria-label={t('Slides')}>
           {deck.slides.map((s, i) => (
-            <div key={s.id} className="lv-film-item">
-              {(i === 0 || deck.slides[i - 1].section_key !== s.section_key) && <p className="lv-film-sec">{s.section}</p>}
-              <button className={`lv-thumb${s.id === sel ? ' on' : ''}`} draggable={editable && !isSystem(s)}
-                onDragStart={() => { drag.current = s.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => drop(i)} onClick={() => setSel(s.id)}>
-                <span className="lv-thumb-n">{s.locked || isSystem(s) ? <Lock size={10} /> : <GripVertical size={11} />}{i + 1}</span>
-                {s.attention > 0 && <i className="lv-dot warn lv-thumb-dot" title={t('open flags')} />}
-                <SlideCanvas spec={s.spec} layouts={layouts} theme={theme} page={i + 1} lang={lang} rid={rid} />
-              </button>
-              {s.shares_with_next && <p className="lv-film-share" title={t('In the file these two share one page')}>↧ {t('shares a page with the next')}</p>}
-            </div>
+            <button key={s.id} className={`thumb${i === idx ? ' on' : ''}`} draggable={editable && !isSystem(s)} onDragStart={() => { drag.current = s.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => drop(i)}
+              onClick={() => setSel(s.id)} aria-label={t('Slide {n}', { n: i + 1 })} title={s.shares_with_next ? t('In the file these two share one page') : undefined}>
+              <span className="t-n">{i + 1}</span>
+              <span className="t-frame"><SlideCanvas spec={s.spec} layouts={layouts} theme={theme} page={i + 1} lang={lang} rid={rid} /></span>
+              {s.attention > 0 && <span className="t-stale" title={t('open flags')} />}
+            </button>
           ))}
-          {editable && <button className="lv-thumb add" onClick={() => add()} disabled={!!busy}><Plus size={18} /> {t('Add slide')}</button>}
-        </div>
+          {editable && <button className="thumb add" onClick={() => add()} disabled={!!busy} aria-label={t('Add slide')}><span className="t-frame add-frame"><Plus size={18} /> {t('Add slide')}</span></button>}
+        </aside>
 
-        <div className="lv-canvas">
-          {slide && (
-            <>
-              <div className="lv-sbar">
-                <span className="muted small">{t('Slide {n} of {total}', { n: idx + 1, total: deck.slides.length })} · {slide.section}</span>
-                <span className="grow" />
-                <button className="btn quiet sm" disabled={!editable || !slide.can_undo || !!busy} onClick={undoSlide}><Undo2 size={14} /> {t('Undo')}</button>
-                <button className="iconbtn" disabled={idx <= 0} onClick={() => setSel(deck.slides[idx - 1].id)} title={t('Previous')}><ArrowLeft size={16} /></button>
-                <button className="iconbtn" disabled={idx >= deck.slides.length - 1} onClick={() => setSel(deck.slides[idx + 1].id)} title={t('Next')}><ArrowRight size={16} /></button>
-              </div>
-              <div className={`lv-slide${editable && !slide.locked ? ' editable' : ''}`}>
-                <SlideCanvas key={slide.id} spec={slide.spec} layouts={layouts} theme={theme} page={idx + 1} lang={lang} rid={rid} onChange={editable && !slide.locked ? edit : undefined} />
-              </div>
-              <p className="muted small lv-hint">{slide.locked ? <><Lock size={12} /> {t('This slide is generated from the others and cannot be edited.')}</> : editable ? t('Click any text on the slide to edit it, or ask AI below. Everything is saved as you go.') : t('The draft is being updated; editing is back in a moment.')}</p>
-
-              <section className="card pad lv-ask">
-                <div className="lv-ask-top">
-                  <h3><Sparkles size={15} /> {t('Ask AI')}</h3>
-                  <div className="lv-seg sm" role="radiogroup" aria-label={t('What should AI change?')}>
-                    {['slide', 'section', 'deck'].map((k) => <button key={k} role="radio" aria-checked={scope === k} className={scope === k ? 'on' : ''} disabled={k === 'section' && isSystem(slide)} onClick={() => setScope(k)}>{scopeLabel[k]}</button>)}
-                  </div>
-                </div>
-                <form className="lv-ask-row" onSubmit={(e) => { e.preventDefault(); if (text.trim().length > 2) ask(); }}>
-                  <input className="lv-in" value={text} disabled={!editable || (scope === 'slide' && slide.locked)} onChange={(e) => setText(e.target.value)}
-                    placeholder={scope === 'slide' ? t('What should change on this slide?') : scope === 'section' ? t('What should change in “{s}”?', { s: slide.section }) : t('What should change in the whole deck?')} />
-                  <button className="btn primary" disabled={!editable || !!busy || text.trim().length < 3 || (scope === 'slide' && slide.locked)}>{busy === 'ask' ? <Spin /> : <Send size={15} />} {t('Send')}</button>
-                </form>
-                <div className="chips lv-chips">{SUGGEST[scope].map((s) => <button key={s} type="button" className="opt" disabled={!editable} onClick={() => setText(t(s))}>{t(s)}</button>)}</div>
-                {scope !== 'slide' && <p className="muted small">{t('A section or the whole deck is written again from the findings; changes you made by hand in it are replaced. You can undo the last such change.')}</p>}
-                {res?.summary && <p className={`lv-res${res.changed ? '' : ' none'}`}>{res.changed ? <Check size={13} /> : <AlertTriangle size={13} />} {res.summary}</p>}
-                {res?.needs?.length > 0 && <ul className="lv-needs">{res.needs.map((n, i) => <li key={i}>{n}</li>)}</ul>}
-                {res?.warnings?.length > 0 && <ul className="lv-needs warn">{res.warnings.map((n, i) => <li key={i}><AlertTriangle size={12} /> {n}</li>)}</ul>}
-                {deck.ai_undo && <button className="btn quiet sm" disabled={!editable || !!busy} onClick={undoAi}><Undo2 size={14} /> {t('Undo the last AI change')}: “{deck.ai_undo.label}”</button>}
-              </section>
-            </>
+        <main className="canvas-col">
+          <div className="canvas-bar">
+            <span className="tpl"><FileText size={14} /> {deck.template || t('Committee template')}</span>
+            <button className="btn quiet sm" onClick={() => setDrawer(true)}><Layers size={14} /> {t('Material')}</button>
+            <span className="grow" />
+            <button className="iconbtn" disabled={idx <= 0} onClick={() => setSel(deck.slides[idx - 1].id)} aria-label={t('Previous slide')}><ChevronLeft size={18} /></button>
+            <span className="small muted">{t('Slide {n} of {total}', { n: idx + 1, total: deck.slides.length })}</span>
+            <button className="iconbtn" disabled={idx >= deck.slides.length - 1} onClick={() => setSel(deck.slides[idx + 1].id)} aria-label={t('Next slide')}><ChevronRight size={18} /></button>
+          </div>
+          <div className="canvas">
+            <div className={`lv-slide${editable && !slide.locked ? ' editable' : ''}`}>
+              <SlideCanvas key={slide.id} spec={slide.spec} layouts={layouts} theme={theme} page={idx + 1} lang={lang} rid={rid} onChange={editable && !slide.locked ? edit : undefined} />
+            </div>
+          </div>
+          <p className="canvas-hint"><Info size={13} /> {slide.locked ? t('This slide is generated from the others and cannot be edited.') : editable ? t('Click any text on the slide to edit it.') : t('The draft is being updated; editing is back in a moment.')}</p>
+          {sources.length > 0 && (
+            <div className="slide-src">
+              <span className="muted small">{t('Sources on this slide')}</span>
+              {sources.map((e) => <span key={e.source} className="src-pill" title={e.quote || e.statement}><SourceIcon kind={kindOf(e)} size={13} /> {e.source}</span>)}
+              <button className="textlink small" onClick={() => setWhy(!why)}>{why ? t('Hide evidence') : t('Show evidence')}</button>
+            </div>
           )}
-        </div>
+          {why && <section className="card pad"><h2>{t('Why does this slide say that?')}</h2><Why key={slide.id} slide={slide} /></section>}
+        </main>
 
-        <aside className="lv-insp">
-          {panel === 'attention' ? (
-            <section className="card pad"><h3><AlertTriangle size={15} /> {t('Needs your attention')}</h3>
-              <p className="muted small">{t('Nothing here stops you from downloading the draft.')}</p>
-              <Attention items={attn} deck={deck} rid={rid} toast={toast} reload={reload} load={load} onJump={jump} /></section>
-          ) : slide && (
-            <>
-              <section className="card pad"><h3>{t('Why does this slide say that?')}</h3><Why key={slide.id} slide={slide} />
-                {slide.spec.source_line && <p className="muted small">{slide.spec.source_line}</p>}</section>
-              <section className="card pad">
-                <h3>{t('Speaker notes')}</h3>
-                <textarea key={slide.id + (slide.spec.notes || '').length} className="lv-in" rows={4} defaultValue={slide.spec.notes || ''} disabled={!editable || slide.locked}
-                  onBlur={(e) => { if (e.target.value !== (slide.spec.notes || '')) edit({ ...slide.spec, notes: e.target.value }); }} />
-              </section>
-              {editable && (
-                <div className="lv-row">
-                  <select className="lv-in" value="" onChange={(e) => e.target.value && add(e.target.value)} aria-label={t('Add slide')}>
-                    <option value="">{t('Add slide with layout…')}</option>
-                    {Object.entries(layouts.layouts).filter(([k]) => k !== 'decision').map(([k, v]) => <option key={k} value={k}>{v.label[lang] || v.label.en}</option>)}
-                  </select>
-                  <button className="btn quiet sm" disabled={!!busy || slide.locked || ['_title', '_summary', '_decision'].includes(slide.section_key)} onClick={del}><Trash2 size={14} /> {t('Delete')}</button>
-                </div>
-              )}
-            </>
-          )}
+        <aside className="panel">
+          <section className="card pad">
+            <div className="ask-head"><h2><Sparkles size={15} /> {t('Ask AI')}</h2>
+              <div className="seg sm" role="radiogroup" aria-label={t('What should AI change?')}>
+                {['slide', 'section', 'deck'].map((k) => <button key={k} type="button" role="radio" aria-checked={scope === k} className={scope === k ? 'on' : ''} disabled={k === 'section' && isSystem(slide)} onClick={() => setScope(k)}>{scopeLabel[k]}</button>)}
+              </div>
+            </div>
+            <form className="chat-in" onSubmit={(e) => { e.preventDefault(); if (text.trim().length > 2) ask(); }}>
+              <input value={text} disabled={!editable || (scope === 'slide' && slide.locked)} onChange={(e) => setText(e.target.value)} aria-label={t('Ask AI')}
+                placeholder={scope === 'slide' ? t('What should change on this slide?') : scope === 'section' ? t('What should change in “{s}”?', { s: slide.section }) : t('What should change in the whole deck?')} />
+              <button className="round solid sm" aria-label={t('Send')} disabled={!editable || !!busy || text.trim().length < 3}><Send size={15} /></button>
+            </form>
+            <div className="chips">{SUGGEST[scope].map((x) => <button key={x} type="button" className="opt" disabled={!editable} onClick={() => ask(t(x))}>{t(x)}</button>)}</div>
+            {busy === 'ask' && <p className="working"><Loader2 size={14} className="spin" /> {t('Working…')}</p>}
+            {scope !== 'slide' && <p className="muted small">{t('A section or the whole deck is written again from the findings; changes you made by hand in it are replaced. You can undo the last such change.')}</p>}
+            {res?.summary && <p className="logline">{res.changed ? <Check size={13} className="ok" /> : <AlertTriangle size={13} />} {res.summary}{slide.can_undo && scope === 'slide' && res.changed && <button className="textlink" disabled={!editable || !!busy} onClick={undoSlide}><Undo2 size={12} /> {t('Undo')}</button>}</p>}
+            {res?.needs?.map((n, i) => <p key={i} className="logline muted">{n}</p>)}
+            {res?.warnings?.map((n, i) => <p key={i} className="logline"><AlertTriangle size={13} /> {n}</p>)}
+            {deck.ai_undo && <p className="logline"><Undo2 size={13} /> {t('Undo the last AI change')}: “{deck.ai_undo.label}” <button className="textlink" disabled={!editable || !!busy} onClick={undoAi}>{t('Undo')}</button></p>}
+          </section>
+
+          <section className="card pad">
+            <div className="card-head"><h2>{t('Checks')}</h2><span className={`pill ${attn.length ? 'warn' : 'good'}`}>{attn.length ? t('{n} to look at', { n: attn.length }) : t('All clear')}</span></div>
+            <Checks items={attn} rid={rid} toast={toast} reload={reload} load={load} onJump={jump} />
+          </section>
+
+          <section className="card pad">
+            <h2>{t('Speaker notes')} <span className="muted small">· {t('slide {n}', { n: idx + 1 })}</span></h2>
+            <textarea key={slide.id + (slide.spec.notes || '').length} className="notes" rows={4} defaultValue={slide.spec.notes || ''} disabled={!editable || slide.locked}
+              placeholder={t('What you want to say on this slide')} aria-label={t('Speaker notes')}
+              onBlur={(e) => { if (e.target.value !== (slide.spec.notes || '')) edit({ ...slide.spec, notes: e.target.value }); }} />
+            {editable && !slide.locked && !['_title', '_summary', '_decision'].includes(slide.section_key) && <button className="btn quiet sm" disabled={!!busy} onClick={del}><Trash2 size={14} /> {t('Delete slide')}</button>}
+          </section>
         </aside>
       </div>
+
+      <ActionBar>
+        <div className="ab-text">
+          <strong>{attn.length ? t(attn.length > 1 ? '{n} points need attention' : '{n} point needs attention', { n: attn.length }) : t('Ready to download')}</strong>
+          <span>{deck.export.shared > 0 ? t('The file has {n} slides: short sections that follow each other share a page. You can adjust that in PowerPoint.', { n: deck.export.slides }) : t('Nothing here stops you from downloading the draft.')}</span>
+        </div>
+        <button className="btn quiet" onClick={() => go('brief')}><ArrowLeft size={16} /> {t('Brief')}</button>
+        <button className="btn" onClick={() => setPresent(true)}><Play size={15} /> {t('Present')}</button>
+        <button className="btn primary lg" disabled={!!busy || working} onClick={download}>{busy === 'dl' ? <Spin /> : <Download size={17} />} {t('Download PowerPoint')}</button>
+      </ActionBar>
+
+      {present && <Present deck={deck} layouts={layouts} theme={theme} lang={lang} rid={rid} start={Math.max(0, idx)} onClose={() => setPresent(false)} />}
       {drawer && <Material rid={rid} sections={sections} toast={toast} onClose={() => setDrawer(false)} onApply={applyPictures} />}
+    </div>
+  );
+}
+
+function Present({ deck, layouts, theme, lang, rid, start, onClose }) {
+  const [i, setI] = useState(start);
+  const n = deck.slides.length;
+  useEffect(() => {
+    const k = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' || e.key === ' ') setI((x) => Math.min(n - 1, x + 1));
+      if (e.key === 'ArrowLeft') setI((x) => Math.max(0, x - 1));
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [n, onClose]);
+  return (
+    <div className="present" onClick={() => setI((x) => Math.min(n - 1, x + 1))}>
+      <button className="iconbtn light" onClick={(e) => { e.stopPropagation(); onClose(); }} aria-label={t('Exit presentation')}><X size={20} /></button>
+      <div className="present-slide"><SlideCanvas spec={deck.slides[i].spec} layouts={layouts} theme={theme} page={i + 1} lang={lang} rid={rid} /></div>
+      <p className="present-hint">{i + 1} / {n} · {t('Arrow keys to move · Esc to close')}</p>
     </div>
   );
 }

@@ -1,33 +1,59 @@
 // What the draft is made from: the progress screen while the research runs, and the material behind the slides (sources, pictures and charts, research plan).
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, BarChart3, Check, ExternalLink, FileText, Globe, ImageIcon, RefreshCw, Search, UserRound } from 'lucide-react';
+import { AlertTriangle, BarChart3, Check, CircleDashed, ExternalLink, FileText, Globe, ImageIcon, Loader2, RefreshCw, Search, UserRound } from 'lucide-react';
 import { t } from '../i18n.js';
 import { api } from './client.js';
-import { Empty, nf, ProgressBar, Spin, useAction } from './kit.jsx';
+import { Empty, nf, Spin, useAction } from './kit.jsx';
+import { ActionBar } from '../components/ui.jsx';
 
-// one list for the whole run: research, analysis and the first draft of the slides
-const STEPS = [['reading', 'Read your material'], ['planning', 'Plan the research'], ['searching', 'Search the web and sources'], ['gaps', 'Close the gaps'], ['assets', 'Look at pictures and charts'],
-  ['analysing', 'Analyse sections'], ['red-team', 'Cross-check the whole draft'], ['storyline', 'Plan the storyline'], ['writing slides', 'Write the slides'], ['building file', 'Build the PowerPoint file']];
+// one list for the whole run: research, analysis and the first draft of the slides (same screen as the demo's, with the real progress)
+const STEPS = [['reading', 'Reading your material', 'Reader'], ['planning', 'Planning the research', 'Research planner'], ['searching', 'Searching the web and sources', 'Web researcher'],
+  ['gaps', 'Closing the gaps', 'Research planner'], ['assets', 'Looking at pictures and charts', 'Asset analyst'], ['analysing', 'Analysing the sections', 'Analyst'],
+  ['red-team', 'Cross-checking the whole draft', 'Cross-checker'], ['storyline', 'Planning the storyline', 'Storyline architect'], ['writing slides', 'Writing the slides', 'Slide writer'],
+  ['building file', 'Building the PowerPoint file', 'Builder']];
 const ALIAS = { extracting: 'reading', screening: 'searching', collected: 'assets', analysed: 'red-team', done: 'building file' };
 
-export function Running({ rid, c, onRetry, busy }) {
+export function Running({ rid, c, onRetry, busy, onBack }) {
   const j = c.job; const p = j?.progress || {};
   const idx = Math.max(0, STEPS.findIndex(([k]) => k === (ALIAS[p.step] || p.step)));
   const failed = j?.status === 'failed';
+  const pct = p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : Math.round((idx / STEPS.length) * 100);
+  const log = (p.log || []).slice(-8);
   return (
-    <div className="lv-stage">
-      <div className="stage-head center">
-        <h1 className="display md">{failed ? t('The draft could not be finished') : t('Reading, researching, writing your slides…')}</h1>
-        <p className="lede">{failed ? j.error : t('You can leave this page open or come back later: the work continues on the server. When it is done, the draft opens here.')}</p></div>
-      <div className="card pad lv-run">
-        {!failed && <ProgressBar done={p.done || 0} total={p.total || 1} />}
-        <ol className="lv-steps">
-          {STEPS.map(([k, label], i) => <li key={k} className={failed && i === idx ? 'bad' : i < idx ? 'done' : i === idx ? 'now' : ''}>{i < idx ? <Check size={14} /> : i === idx && !failed ? <Spin size={14} /> : <i />}{t(label)}</li>)}
+    <div className="stage stage-run">
+      <header className="stage-head center">
+        <p className="eyebrow">{t('Step 2 · Draft')}</p>
+        <h1 className="display lg">{failed ? t('The draft could not be finished') : <>{t('Reading everything,')} <em>{t('so you do not have to.')}</em></>}</h1>
+        <p className="lede">{failed ? j.error : t('The agents work through your material. You can leave this page: the work continues on the server and the draft opens here when it is ready.')}</p>
+      </header>
+
+      <div className="run-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${failed ? pct : pct}%` }} /></div>
+
+      <div className="run-grid">
+        <ol className="run-steps">
+          {STEPS.map(([k, title, agent], i) => {
+            const st = failed && i === idx ? 'todo' : i < idx ? 'done' : i === idx ? 'active' : 'todo';
+            return (
+              <li key={k} className={st}>
+                <span className="rs-ico">{st === 'done' ? <Check size={14} strokeWidth={2.6} /> : st === 'active' ? <Loader2 size={14} className="spin" /> : failed && i === idx ? <AlertTriangle size={14} /> : <CircleDashed size={14} />}</span>
+                <span className="rs-main"><strong>{t(title)}</strong><span className="mono">{t(agent)}</span></span>
+              </li>
+            );
+          })}
         </ol>
-        {(p.log || []).length > 0 && <ul className="lv-log">{p.log.slice(-6).map((l, i) => <li key={i}>{l}</li>)}</ul>}
-        {failed && <button className="btn primary" disabled={!!busy} onClick={onRetry}>{busy ? <Spin /> : <RefreshCw size={15} />} {t('Try again')}</button>}
+        <div className="run-feed card pad">
+          <h2>{t('Findings so far')}</h2>
+          <p className="muted small">{t('{a} files · {b} sources read · {c} findings', { a: c.counts.files, b: c.counts.sources, c: c.counts.claims })}</p>
+          {log.length === 0 && <p className="muted">{t('Starting…')}</p>}
+          <ul>{log.map((l, i) => <li key={i}><Check size={16} /><span>{l}</span></li>)}</ul>
+        </div>
       </div>
-      {!failed && <div className="card pad lv-run"><h2>{t('The research plan')}</h2><ResearchPlan rid={rid} live /></div>}
+
+      <ActionBar>
+        <div className="ab-text"><strong>{failed ? t('The analysis stopped') : t('Analysing {n} files and the web', { n: c.counts.files })}</strong>
+          <span>{failed ? t('Nothing was lost. You can try again.') : t('This usually takes a few minutes.')}</span></div>
+        {failed && <button className="btn primary" disabled={!!busy} onClick={onRetry}>{busy ? <Spin /> : <RefreshCw size={15} />} {t('Try again')}</button>}
+      </ActionBar>
     </div>
   );
 }

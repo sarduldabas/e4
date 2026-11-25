@@ -15,7 +15,7 @@ const CHIPS = [
   { key: 'template', label: 'Template', ph: 'Choose template' },
 ];
 
-const extKind = (name) => {
+export const extKind = (name) => {
   const e = name.split('.').pop().toLowerCase();
   if (['ppt', 'pptx', 'potx'].includes(e)) return 'pptx';
   if (e === 'pdf') return 'pdf';
@@ -24,7 +24,7 @@ const extKind = (name) => {
   return 'pdf';
 };
 
-function SmartChip({ def, value, onCommit }) {
+export function SmartChip({ def, value, onCommit }) {
   const [edit, setEdit] = useState(false);
   const [v, setV] = useState('');
   const ref = useRef(null);
@@ -177,7 +177,7 @@ export default function StageBrief({ ws, assessment, setBrief, briefChanged, onS
   return (
     <div className="stage stage-brief">
       <header className="stage-head">
-        <p className="eyebrow">{t("Step 1 of 3 · Brief")}</p>
+        <p className="eyebrow">{t("Step 1 of 2 · Brief")}</p>
         <h1 className="display lg">{t("Tell me what you are")} <em>{t("presenting.")}</em></h1>
         <p className="lede">{t("Speak or type, the way you would brief a colleague. Drop in whatever you have. I organise it.")}</p>
         <div className="expect">

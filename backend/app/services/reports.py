@@ -24,12 +24,12 @@ class ReportsService:
         self.db = db
         self._on_delete = on_delete
 
-    def seed(self) -> None:
+    def seed(self, sample_reports: bool = False) -> None:
         with self.db.session() as s:
             if s.query(CommitteeRow).count() == 0:
                 for c in COMMITTEES:
                     s.add(CommitteeRow(id=c["id"], name=c["name"], date=c["date"], template=c["template"], has_report=c["has_report"]))
-            if s.query(ReportRow).count() == 0:
+            if sample_reports and s.query(ReportRow).count() == 0:
                 for r in REPORTS:
                     s.add(ReportRow(id=r["id"], title=r["title"], committee=r["committee"], committee_id=next((c["id"] for c in COMMITTEES if c["name"] == r["committee"]), None),
                                     date=r["date"], version=r["version"], version_no=int(r["version"].lstrip("v") or 1), status=r["status"], stage=r["stage"],
