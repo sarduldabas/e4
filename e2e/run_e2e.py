@@ -4,7 +4,7 @@
     python e2e/run_e2e.py --keep     # leave the generated decks in e2e/out/
     python e2e/run_e2e.py --url http://localhost:8001   # demo against services you already started (creates a report you can open)
 
-It checks the three checkpoints, the guard rails (a wrong number is caught, blockers stop generation) and version 2.
+It checks the two steps (brief, draft), the guard rails (a wrong number is caught and kept out of the slides), Ask AI with undo, and the export.
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def main(keep: bool = False, url: str | None = None) -> int:
             check(r.status_code == 201, f"uploaded {name}")
         check(c.post(f"/api/v1/reports/{rid}/files", files={"file": ("x.exe", b"MZ")}, data={"role": "source"}).status_code == 422, "unsupported file type refused")
 
-        step("checkpoint 1: outline + interview")
+        step("brief: outline + interview, then the draft is built")
         check(c.post(f"/api/v1/reports/{rid}/outline/approve").status_code == 409, "cannot approve before the outline exists")
         o = c.post(f"/api/v1/reports/{rid}/outline/propose").json()
         keys = [s["key"] for s in o["sections"]]
@@ -104,95 +104,60 @@ def main(keep: bool = False, url: str | None = None) -> int:
         res = job(rid, j)
         check(res["status"] == "done", f"research + analysis job done ({res.get('error')})")
         case = c.get(f"/api/v1/reports/{rid}/case").json()
-        check(case["state"] == "FINDINGS_REVIEW", f"state FINDINGS_REVIEW, counts {case['counts']}")
+        check(case["state"] == "DECK_REVIEW", f"the draft is built in one go, state DECK_REVIEW, counts {case['counts']}")
         srcs = c.get(f"/api/v1/reports/{rid}/sources").json()
         check(any(s["status"] == "rejected" for s in srcs) or all(s["status"] == "parsed" for s in srcs), "sources screened")
         check(case["counts"]["evidence"] >= 8, "evidence extracted")
 
-        step("checkpoint 2: findings")
+        step("the draft: evidence, edits, Ask AI, download")
         f = c.get(f"/api/v1/reports/{rid}/findings").json()
         opt = next(s for s in f["sections"] if s["key"].startswith("optionen"))
         check(len(opt["claims"]) >= 2, f"options section has {len(opt['claims'])} claims")
         check(all(cl["evidence"] or cl["calculations"] for cl in opt["claims"]), "every claim has evidence or a calculation")
         ev_quote = next(e for cl in opt["claims"] for e in cl["evidence"] if e["quote"])
         check(bool(ev_quote["locator"] and ev_quote["source"]), f"traceable: '{ev_quote['quote'][:50]}' <- {ev_quote['source']}, {ev_quote['locator']}")
-        # an edit with a wrong number must be caught and block approval
+        check(c.post(f"/api/v1/reports/{rid}/findings/approve").status_code == 404 and c.post(f"/api/v1/reports/{rid}/deck/finalize").status_code == 404, "no sign-off steps exist")
+        # an edit with a wrong number is caught, kept out of the slides and listed; it never blocks the download
         victim = opt["claims"][0]
         r = c.patch(f"/api/v1/reports/{rid}/claims/{victim['id']}", json={"text": "Option A kostet 99 Mio €."}).json()
         check(r["status"] == "flagged" and r["verdict"] in ("unsupported", "contradicted"), f"edited claim with a wrong number is flagged ({r['verdict']})")
-        blocked = c.post(f"/api/v1/reports/{rid}/findings/approve")
-        check(blocked.status_code == 409 and blocked.json()["items"], "generation blocked while a blocker flag is open")
-        fl = next(x for x in c.get(f"/api/v1/reports/{rid}/findings").json()["sections"] if x["key"] == opt["key"])["flags"]
-        open_b = [x for x in fl if x["severity"] == "blocker" and x["status"] == "open"]
-        check(c.post(f"/api/v1/reports/{rid}/flags/{open_b[0]['id']}/resolve", json={"resolution": "accepted"}).status_code == 409, "a blocker can not be accepted without a reason")
-        r = c.patch(f"/api/v1/reports/{rid}/claims/{victim['id']}", json={"status": "rejected"})
-        check(r.status_code == 200, "wrong claim rejected")
-        f = c.get(f"/api/v1/reports/{rid}/findings").json()
-        for fl in [x for s in f["sections"] for x in s["flags"] if x["severity"] == "blocker" and x["status"] == "open"]:
-            c.post(f"/api/v1/reports/{rid}/flags/{fl['id']}/resolve", json={"resolution": "dismissed", "note": "Kenne ich, ist für die Vorlage irrelevant."})
-        general = [x for x in f["general_flags"] if x["severity"] == "blocker" and x["status"] == "open"]
-        for fl in general:
-            c.post(f"/api/v1/reports/{rid}/flags/{fl['id']}/resolve", json={"resolution": "dismissed", "note": "geprüft"})
-        j = c.post(f"/api/v1/reports/{rid}/findings/approve")
-        check(j.status_code == 202, f"findings approved ({j.text[:100]})")
-        res = job(rid, j.json()["job_id"])
-        check(res["status"] == "done", f"deck generated ({res.get('error')})")
-
-        step("checkpoint 3: deck")
         d = c.get(f"/api/v1/reports/{rid}/deck").json()
-        check(len(d["slides"]) >= 4 and d["has_file"], f"{len(d['slides'])} content slides")
+        check(any(a["kind"] == "claim" and a["id"] == victim["id"] for a in d["attention"]), "the left-out claim is listed under attention")
+        check(len(d["slides"]) >= 4 and d["has_file"] and d["export"]["slides"] <= len(d["slides"]), f"{len(d['slides'])} slides in the draft, {d['export']['slides']} pages in the file")
         check(all(b["claim_ids"] for s in d["slides"] for b in s["bullets"]), "every bullet is tied to a claim")
-        sl = d["slides"][0]
+        sl = next(s for s in d["slides"] if s["bullets"])
         r = c.patch(f"/api/v1/reports/{rid}/deck/slides/{sl['id']}", json={"bullets": [sl["bullets"][0]["text"], "Neue Zahl 777 Mio €."]}).json()
         check(len(r["warnings"]) == 1, f"a number outside the verified claims is warned about: {r['warnings']}")
+        a1 = c.post(f"/api/v1/reports/{rid}/deck/ask", json={"text": "Bei den Risiken ist die Aussage falsch, bitte neu berechnen und korrigieren.", "scope": "section", "section_key": next(x["key"] for x in f["sections"] if x["key"].startswith("risiken"))})
+        check(a1.status_code in (200, 202) and a1.json()["mode"] == "job", f"Ask AI on a section runs as a job ({a1.text[:100]})")
+        check(job(rid, a1.json()["job_id"])["status"] == "done", "the section was written again in place")
+        case = c.get(f"/api/v1/reports/{rid}/case").json()
+        check(case["version"] == "v1" and case["state"] == "DECK_REVIEW", f"still one version, state {case['state']}")
+        check(c.post(f"/api/v1/reports/{rid}/deck/ask/undo").status_code == 200, "the last AI change can be undone")
         pptx = c.get(f"/api/v1/reports/{rid}/deck/download")
         check(pptx.status_code == 200 and pptx.content[:2] == b"PK", f"pptx downloaded ({len(pptx.content)} bytes)")
         from pptx import Presentation
         prs = Presentation(io.BytesIO(pptx.content))
+        check(len(prs.slides) == c.get(f"/api/v1/reports/{rid}/deck").json()["export"]["slides"], f"the file has the announced {len(prs.slides)} pages (short sections share a page)")
         text = "\n".join(sh.text_frame.text for s in prs.slides for sh in s.shapes if sh.has_text_frame)
         check("12 Mio" in text and "Quellen" in text, "deck contains the verified figure and a sources slide")
         check(any(sh.has_chart for s in prs.slides for sh in s.shapes if getattr(sh, "has_chart", False)), "deck contains a native chart built from ledger numbers")
         if keep:
             out = ROOT / "e2e" / "out"
             out.mkdir(exist_ok=True)
-            (out / "deck_v1.pptx").write_bytes(pptx.content)
-
-        step("feedback -> version 2")
-        check(c.post(f"/api/v1/reports/{rid}/feedback", json={"text": "x"}).status_code == 422, "too-short feedback refused")
-        c.post(f"/api/v1/reports/{rid}/deck/finalize")
-        check(c.get(f"/api/v1/reports/{rid}/case").json()["state"] == "FINAL", "deck final")
-        fbk = c.post(f"/api/v1/reports/{rid}/feedback", json={"text": "Bei den Risiken ist die Aussage falsch, bitte neu berechnen und korrigieren."}).json()
-        check(fbk["changes"] and fbk["changes"][0]["rerun_from"] == "analysis", f"interpreted: {fbk['changes'][0]['action']} -> {fbk['changes'][0]['rerun_from']} ({fbk['changes'][0]['section_key']})")
-        j = c.post(f"/api/v1/reports/{rid}/feedback/{fbk['id']}/apply").json()["job_id"]
-        res = job(rid, j)
-        check(res["status"] == "done", f"version 2 job done ({res.get('error')})")
-        case = c.get(f"/api/v1/reports/{rid}/case").json()
-        check(case["version"] == "v2" and case["state"] == "FINDINGS_REVIEW", f"v2 awaiting approval of re-analysed section, state {case['state']}")
-        f2 = c.get(f"/api/v1/reports/{rid}/findings").json()
-        carried = [cl for s in f2["sections"] for cl in s["claims"] if cl["status"] == "approved"]
-        check(len(carried) >= 5, f"approved claims carried forward: {len(carried)}")
-        for fl in [x for s in f2["sections"] for x in s["flags"] if x["severity"] == "blocker" and x["status"] == "open"] + [x for x in f2["general_flags"] if x["severity"] == "blocker" and x["status"] == "open"]:
-            c.post(f"/api/v1/reports/{rid}/flags/{fl['id']}/resolve", json={"resolution": "dismissed", "note": "geprüft"})
-        j = c.post(f"/api/v1/reports/{rid}/findings/approve")
-        check(j.status_code == 202, f"v2 findings approved ({j.text[:120]})")
-        check(job(rid, j.json()["job_id"])["status"] == "done", "v2 deck generated")
-        d2 = c.get(f"/api/v1/reports/{rid}/deck").json()
-        pptx2 = c.get(f"/api/v1/reports/{rid}/deck/download").content
-        t2 = "\n".join(sh.text_frame.text for s in Presentation(io.BytesIO(pptx2)).slides for sh in s.shapes if sh.has_text_frame)
-        check("Änderungen gegenüber v1" in t2, "v2 deck has the 'changes since v1' slide")
-        if keep:
-            (ROOT / "e2e" / "out" / "deck_v2.pptx").write_bytes(pptx2)
+            (out / "deck.pptx").write_bytes(pptx.content)
 
         step("audit trail")
         runs = c.get(f"/api/v1/reports/{rid}/agent-runs").json()
         ids = {r["agent"] for r in runs}
-        check(len(ids) == 11 and "web-researcher" not in ids, f"11 agents were called (the 12th, web-researcher, runs only with ALLOW_WEB=true): {sorted(ids)}")
+        need = {"template-analyst", "interviewer", "evidence-extractor", "source-planner", "section-analyst", "verifier", "red-team", "storyline-architect", "slide-writer", "feedback-interpreter"}
+        check(need <= ids, f"{len(ids)} agents were called, including every one of the main chain: {sorted(ids)}")
         modes = sorted({r["mode"] for r in runs})
         print(f"  info agent modes used: {modes}" + ("  (llm = your Foundry model answered; rules = the built-in fallback)" if url else ""))
         if not url:
             check(modes == ["rules"], "all runs in rules mode")
         ev = c.get(f"/api/v1/reports/{rid}/events").json()
-        check({"outline_approved", "findings_approved", "deck_final", "new_version"} <= {e["kind"] for e in ev}, f"{len(ev)} events recorded")
+        check({"outline_approved", "deck_exported"} <= {e["kind"] for e in ev}, f"{len(ev)} events recorded")
         print(f"\nALL CHECKS PASSED ({len(runs)} agent calls, {len(ev)} events)" + (f". Open {base_url}/docs and look at /api/v1/reports/{rid}/agent-runs" if url else f", database {tmp / 'data' / 'coe4.db'}"))
         return 0
     except Exception as e:  # noqa: BLE001

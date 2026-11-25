@@ -238,7 +238,7 @@ export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
     return out;
   };
   const propose = () => run('prop', async () => { await api.putCase(rid, body()); dirty.current = false; setSaved(true); await api.proposeOutline(rid); setOutlineKey((k) => k + 1); await reload(); });
-  const approve = () => run('approve', async () => { await api.approveOutline(rid); await reload(); go('analysis'); });
+  const approve = () => run('approve', async () => { await api.approveOutline(rid); await reload(); go('draft'); });
   const web = f.use_web && c.web_enabled;
   return (
     <div className="lv-stage narrow">
@@ -246,9 +246,9 @@ export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
         <div><p className="eyebrow">{t('Step 1 · Brief')}</p><h1 className="display md">{t('Tell me what you know')}</h1></div>
         <span className="muted small">{saved ? <><CheckCircle2 size={14} /> {t('Saved')}</> : <><Spin size={13} /> {t('Saving…')}</>}</span>
       </div>
-      {!open && <div className="lv-banner info"><ListChecks size={20} /><div><strong>{t('The outline is approved')}</strong><span>{t('The brief is locked while the analysis runs or its results are being reviewed. Start a new version from the report step to change it.')}</span></div></div>}
+      {!open && <div className="lv-banner info"><ListChecks size={20} /><div><strong>{t('The outline is approved')}</strong><span>{t('The brief is locked once the draft is made. Change the draft itself with Ask AI or directly on the slides.')}</span></div></div>}
 
-      <Step n={1} title={t('What is this about?')} hint={t('Write it the way you would explain it to a colleague. The more concrete, the better the analysis.')} done={ready} aside={<StrengthChip a={assess} />}>
+      <Step n={1} title={t('What is this about?')} hint={t('Write it the way you would explain it to a colleague. The more concrete, the better the draft.')} done={ready} aside={<StrengthChip a={assess} />}>
         <div className="lv-row">
           <div className="lv-field grow"><label>{t('Topic')}</label><input className="lv-in" value={f.topic} disabled={!open} placeholder={t('What is this report about?')} onChange={set('topic')} /></div>
           <div className="lv-field"><label>{t('Committee')}</label>
@@ -298,10 +298,10 @@ export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
         </details>
       )}
 
-      <NextBar status={!ready ? t('Start with the topic.') : !hasOutline ? t('Next: I draft an outline from your brief and files.') : open ? t('{a} files · the analysis starts when you approve.', { a: files.length }) : t('The outline is approved.')}>
+      <NextBar status={!ready ? t('Start with the topic.') : !hasOutline ? t('Next: I draft an outline from your brief and files.') : open ? t('{a} files · the draft is created when you approve.', { a: files.length }) : t('The outline is approved.')}>
         {!hasOutline && <button className="btn primary lg" disabled={!!busy || !ready} onClick={propose}>{busy === 'prop' ? <Spin /> : <Sparkles size={17} />} {t('Create outline')}</button>}
-        {hasOutline && open && <button className="btn primary lg" disabled={!!busy} onClick={approve}>{busy === 'approve' ? <Spin /> : <Sparkles size={17} />} {t('Approve outline and start analysis')}</button>}
-        {hasOutline && !open && <button className="btn lg" onClick={() => go('analysis')}>{t('To the analysis')}</button>}
+        {hasOutline && open && <button className="btn primary lg" disabled={!!busy} onClick={approve}>{busy === 'approve' ? <Spin /> : <Sparkles size={17} />} {t('Approve outline and create the draft')}</button>}
+        {hasOutline && !open && <button className="btn lg" onClick={() => go('draft')}>{t('To the draft')}</button>}
       </NextBar>
     </div>
   );

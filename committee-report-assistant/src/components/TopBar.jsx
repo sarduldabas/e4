@@ -1,7 +1,7 @@
 import { t } from '../i18n.js';
 import { Check, ChevronDown, History, Share2, Lock, LayoutGrid } from 'lucide-react';
 import { Avatars } from './ui.jsx';
-import { briefStrength, includedSections } from '../workspace.js';
+import { briefStrength } from '../workspace.js';
 import ModeToggle from '../live/ModeToggle.jsx';
 
 export function Brand({ onClick }) {
@@ -15,22 +15,16 @@ export function Brand({ onClick }) {
 
 const STEPS = [
   { n: 1, label: 'Brief', sub: 'Tell me what you know' },
-  { n: 2, label: 'Analysis', sub: 'Check what I found' },
-  { n: 3, label: 'Report', sub: 'Shape the slides' },
+  { n: 2, label: 'Draft', sub: 'Adjust and download' },
 ];
 
 function caption(n, ws, assessment) {
   if (n === 1) return t('{p}% brief strength', { p: assessment ? assessment.strength.score : briefStrength(ws.brief) });
-  if (n === 2) {
-    const a = ws.analysis;
-    if (a.status === 'idle') return t('Not started');
-    if (a.status === 'running') return t('Analysing…');
-    const secs = includedSections(ws);
-    return t('{a} of {b} reviewed', { a: secs.filter((s) => a.reviewed[s.id]).length, b: secs.length });
-  }
+  const a = ws.analysis;
+  if (a.status === 'idle') return t('Not started');
+  if (a.status === 'running') return t('Analysing…');
   const d = ws.deck;
-  if (d.status === 'idle') return t('Not started');
-  if (d.status === 'building') return t('Building…');
+  if (d.status === 'idle' || d.status === 'building') return t('Building…');
   return t('{n} slides', { n: d.slides.length });
 }
 

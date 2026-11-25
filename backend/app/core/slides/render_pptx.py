@@ -219,6 +219,12 @@ class Deck:
         tf = _frame(tb, margin=fit.PAD * cv.sx * 0.6)
         for i, it in enumerate(b["items"]):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            if it.get("heading"):  # the title of a section that shares the slide: no bullet, bold, in the main colour
+                p.space_before = cv.pt(b["size"] * 0.3) if i else cv.pt(0)
+                p.space_after = cv.pt(b["size"] * 0.3)
+                p.line_spacing = 1.0
+                _run(p, it["text"], size=b["size"], color=c["primary"], bold=True, font=self.font_h, cv=cv)
+                continue
             sz = b["size"] - (2 if it["level"] else 0)
             _bullet(p, it["level"], sz, cv)
             p.space_after = cv.pt(b["size"] * 0.5)

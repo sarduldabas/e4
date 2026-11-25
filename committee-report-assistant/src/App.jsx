@@ -71,25 +71,20 @@ export default function App() {
     markDeckStale([id]);
   };
 
-  const canGo = (n) => n === 1 || (n === 2 && ws.analysis.status !== 'idle') || (n === 3 && ws.deck.status !== 'idle');
+  const canGo = (n) => n === 1 || (n === 2 && ws.analysis.status !== 'idle');
   const go = (n, focus = null) => { if (!canGo(n)) return; setFlags((f) => ({ ...f, focus })); setStage(n); top(); };
 
   const startNew = ({ text = '', committeeId = null, autoVoice = false }) => {
     setWs(blankWorkspace({ committeeId, text })); setFlags({ autoVoice, focus: null }); setStage(1); setView('ws'); top();
   };
   const openReport = (r) => {
-    setWs(sampleWorkspace(r.title)); setFlags({ autoVoice: false, focus: null }); setStage(r.stage || 2); setView('ws'); top();
+    setWs(sampleWorkspace(r.title)); setFlags({ autoVoice: false, focus: null }); setStage(Math.min(2, r.stage || 2)); setView('ws'); top();
   };
 
   const startAnalysis = () => {
     if (ws.analysis.status === 'idle') setAnalysis({ status: 'running' });
     setStage(2); top();
   };
-  const createReport = () => {
-    if (ws.deck.status === 'idle') setDeck({ status: 'building' });
-    setStage(3); top();
-  };
-
   const slidesCtx = (w) => {
     const m = reportMeta(w);
     return { qc: w.analysis.qualCost, title: m.topic, committee: m.committee, date: m.dateIso, version: w.version };
@@ -122,16 +117,11 @@ export default function App() {
       ) : (
         <>
           <TopBar ws={ws} assessment={assessment} stage={stage} canGo={canGo} onStage={(n) => go(n)} onHome={() => { setView('home'); top(); }} onVersions={() => setVersionsOpen(true)} onShare={() => setShareOpen(true)} lang={lang} setLang={setLang} mode={mode} setMode={setMode} />
-          <div className="stage-anim" key={`${stage}-${stage === 2 ? ws.analysis.status : stage === 3 ? ws.deck.status : ''}`}>
+          <div className="stage-anim" key={`${stage}-${stage === 2 ? ws.analysis.status : ''}`}>
             {stage === 1 && <StageBrief ws={ws} assessment={assessment} setBrief={setBrief} briefChanged={briefChanged} onStart={startAnalysis} autoVoice={flags.autoVoice} toast={toast} />}
-            {stage === 2 && (
-              <StageAnalysis ws={ws} setAnalysis={setAnalysis} setIncluded={setIncluded} markDeckStale={markDeckStale}
-                onBack={() => go(1)} onNext={createReport} toast={toast} focus={flags.focus} />
-            )}
-            {stage === 3 && (
-              <StageReport ws={ws} setDeck={setDeck} onBuilt={onBuilt} updateSlides={updateSlides}
-                gotoAnalysis={(id) => go(2, id)} onBack={() => go(2)} toast={toast} />
-            )}
+            {stage === 2 && (ws.analysis.status === 'running'
+              ? <StageAnalysis ws={ws} setAnalysis={setAnalysis} toast={toast} />
+              : <StageReport ws={ws} setDeck={setDeck} setAnalysis={setAnalysis} markDeckStale={markDeckStale} onBuilt={onBuilt} updateSlides={updateSlides} onBack={() => go(1)} toast={toast} />)}
           </div>
           {versionsOpen && <VersionsDrawer ws={ws} onClose={() => setVersionsOpen(false)} toast={toast} />}
           {shareOpen && <ShareModal onClose={() => setShareOpen(false)} toast={toast} />}

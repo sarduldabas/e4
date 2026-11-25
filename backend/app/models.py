@@ -272,6 +272,16 @@ class Deck(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class DeckSnapshot(Base):
+    """What a section-level AI change replaced (slides, claims, calculations, drafts of the sections), so that it can be undone."""
+    __tablename__ = "deck_snapshots"
+    id: Mapped[str] = _id("sn")
+    report_id: Mapped[str] = mapped_column(ForeignKey("reports.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(300), default="")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = _id("j")

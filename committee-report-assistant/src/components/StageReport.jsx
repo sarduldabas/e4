@@ -1,10 +1,10 @@
 import { t, getLang } from '../i18n.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Play, Download, ArrowLeft, ChevronLeft, ChevronRight, Check, AlertTriangle, RefreshCw, Send, Undo2, X, Loader2, FileText, Info,
+  Play, Download, ArrowLeft, ChevronLeft, ChevronRight, Check, AlertTriangle, Send, Undo2, Loader2, FileText, Info, Sparkles, X,
 } from 'lucide-react';
 import { SRC, qcText, slideText, slideNotes } from '../data.js';
-import { detect, includedSections, reportMeta } from '../workspace.js';
+import { detect, openItems, reportMeta } from '../workspace.js';
 import { ActionBar, Avatar, Modal, SourceIcon, useInterval } from './ui.jsx';
 import { Slide, SlideFrame } from './Slide.jsx';
 
@@ -77,7 +77,7 @@ function ExportModal({ onClose, ws, toast }) {
           </div>
           <label className="check"><input type="checkbox" checked={notes} onChange={(e) => setNotes(e.target.checked)} /> {t("Include speaker notes")}</label>
           <label className="check"><input type="checkbox" checked={appendix} onChange={(e) => setAppendix(e.target.checked)} /> {t("Add source appendix (10 sources)")}</label>
-          <p className="muted small">{t('File name: {name}. Version {v} stays editable until you mark it as presented.', { name, v: ws.version })}</p>
+          <p className="muted small">{t('File name: {name}. Changes are saved automatically; downloading is recorded.', { name, v: ws.version })}</p>
         </div>
       )}
       {state !== 'idle' && (
@@ -91,7 +91,7 @@ function ExportModal({ onClose, ws, toast }) {
   );
 }
 
-export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAnalysis, onBack, toast }) {
+export default function StageReport({ ws, setDeck, setAnalysis, markDeckStale, onBuilt, updateSlides, onBack, toast }) {
   const d = ws.deck;
   const a = ws.analysis;
   const [present, setPresent] = useState(false);
@@ -99,6 +99,7 @@ export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAn
   const [cmd, setCmd] = useState('');
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState([]);
+  const [scope, setScope] = useState('slide');
 
   const qc = qcText(a.qualCost);
   const det = detect(ws.brief);
@@ -117,68 +118,50 @@ export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAn
     return () => window.removeEventListener('keydown', k);
   }, [setDeck]);
 
+  useEffect(() => { if (d.status === 'idle') setDeck({ status: 'building' }); }, [d.status, setDeck]);
+
   const patchSlide = (id, patch) => setDeck((x) => ({ ...x, slides: x.slides.map((s) => (s.id === id ? { ...s, ...patch } : s)) }));
 
   const assist = (text) => {
     const cmdText = (text ?? cmd).trim();
     if (!cmdText || busy || !slide) return;
     setCmd(''); setBusy(true);
-    const prev = { id: slide.id, bullets: slide.bullets, notes: slide.notes, title: slide.title };
+    const targets = d.slides.filter((x) => (scope === 'deck' ? true : scope === 'section' ? x.sectionId === slide.sectionId : x.id === slide.id));
+    const prev = targets.map((x) => ({ id: x.id, bullets: x.bullets, notes: x.notes, title: x.title }));
     setTimeout(() => {
-      const sq = (s) => slideText(s, slide.qcv);
-      if (/short|trim|concise|kürz|kurz|straff/i.test(cmdText)) patchSlide(slide.id, { bullets: slide.bullets.map((b) => shorten(sq(b))) });
-      else if (/note|notiz/i.test(cmdText)) patchSlide(slide.id, { notes: t('Talking points: {p}', { p: slide.bullets.map(sq).join(' ') }) });
-      else if (/conclusion|title|titel|aussage/i.test(cmdText)) patchSlide(slide.id, { title: sq(slide.title).replace(/[.]$/, '') });
+      targets.forEach((x) => {
+        const sq = (q) => slideText(q, x.qcv);
+        if (/short|trim|concise|kürz|kurz|straff/i.test(cmdText)) patchSlide(x.id, { bullets: x.bullets.map((b) => shorten(sq(b))) });
+        else if (/note|notiz/i.test(cmdText)) patchSlide(x.id, { notes: t('Talking points: {p}', { p: x.bullets.map(sq).join(' ') }) });
+        else if (/conclusion|title|titel|aussage/i.test(cmdText)) patchSlide(x.id, { title: sq(x.title).replace(/[.]$/, '') });
+      });
       setLog((l) => [{ text: cmdText, n: d.active + 1, prev, id: Math.random() }, ...l].slice(0, 3));
       setBusy(false);
     }, 1100);
   };
-  const undo = (entry) => { patchSlide(entry.prev.id, { bullets: entry.prev.bullets, notes: entry.prev.notes, title: entry.prev.title }); setLog((l) => l.filter((x) => x.id !== entry.id)); };
+  const undo = (entry) => { entry.prev.forEach((p) => patchSlide(p.id, { bullets: p.bullets, notes: p.notes, title: p.title })); setLog((l) => l.filter((x) => x.id !== entry.id)); };
+  const decide = (kind, v) => {
+    if (kind === 'qc') { setAnalysis((x) => ({ ...x, qualCost: v })); markDeckStale(['s1', 's4', 's7']); if (v) toast(v === 'range' ? t('Both figures will be shown') : t('Using {qc} everywhere, including summary and recommendation', { qc: qcText(v) })); } else { setAnalysis((x) => ({ ...x, gap: v })); markDeckStale(['s3']); }
+    updateSlides();
+  };
 
-  const checks = useMemo(() => {
-    const secs = includedSections(ws);
-    const out = [];
-    const usesQc = d.slides.some((s) => ['s1', 's4', 's7'].includes(s.sectionId));
-    if (a.qualCost === null && usesQc) out.push({ k: 'warn', t: t('Qualification cost shows a range ({range}) because the conflict is open.', { range: qcText(null) }), act: t('Resolve in Analysis'), go: 's4' });
-    else out.push({ k: 'ok', t: t('All figures match the analysis.') });
-    const unrev = secs.filter((s) => !a.reviewed[s.id]).length;
-    if (unrev) out.push({ k: 'warn', t: t('{a} of {b} sections are not reviewed yet.', { a: unrev, b: secs.length }), act: t('Review'), go: secs.find((s) => !a.reviewed[s.id])?.id });
-    else out.push({ k: 'ok', t: t('All sections reviewed.') });
-    if (a.gap === null) out.push({ k: 'info', t: t('Capacity beyond 2029 is still an open gap (slide 4).'), act: t('Resolve in Analysis'), go: 's3' });
-    const long = d.slides.filter((s) => s.bullets.length > 5 || s.title.length > 140);
-    out.push(long.length ? { k: 'warn', t: t('{n} slide(s) exceed template limits.', { n: long.length }) } : { k: 'ok', t: t('Text length within template limits.') });
-    out.push({ k: 'ok', t: t('Every content slide links to its sources.') });
-    return out;
-  }, [ws, d.slides, a, getLang()]); // eslint-disable-line
-  const warnCount = checks.filter((c) => c.k === 'warn').length;
+  const items = openItems(a);
+  const warnCount = items.length;
 
   if (d.status === 'building') return <BuildView onBuilt={onBuilt} />;
   if (!slide) return null;
 
-  const stale = d.staleSections.length;
-  const staleSlides = d.slides.filter((s) => d.staleSections.includes(s.sectionId));
   const jonasAt = d.slides.findIndex((s) => s.id === 'sl-s4a');
 
   return (
     <div className="stage stage-report">
       <header className="stage-head compact">
         <div>
-          <p className="eyebrow">{t("Step 3 of 3 · Report")}</p>
-          <h1 className="display md">{t("Make it yours,")} <em>{t("then present.")}</em></h1>
+          <p className="eyebrow">{t("Step 2 · Draft")}</p>
+          <h1 className="display md">{t("Your draft is ready.")} <em>{t("Adjust it, then download.")}</em></h1>
         </div>
-        <div className="expect narrow">
-          <div><span className="expect-k">{t("From you")}</span><span>{t("Edit text directly, ask for changes, resolve the checks.")}</span></div>
-          <div><span className="expect-k">{t("Then")}</span><span>{t("Export, or present from here.")}</span></div>
-        </div>
+        <span className="muted small"><Check size={13} /> {t('Saved automatically')}</span>
       </header>
-
-      {stale > 0 && (
-        <div className="banner">
-          <RefreshCw size={18} />
-          <div><strong>{t("The analysis changed after these slides were built")}</strong><span>{t(staleSlides.length === 1 ? '{n} slide affected. Slides you edited by hand elsewhere stay untouched.' : '{n} slides affected. Slides you edited by hand elsewhere stay untouched.', { n: staleSlides.length })}</span></div>
-          <button className="btn primary sm" onClick={() => { updateSlides(); toast(t('Slides updated')); }}>{t("Update slides")}</button>
-        </div>
-      )}
 
       <div className="rep-grid">
         <aside className="rail" aria-label={t("Slides")}>
@@ -187,7 +170,6 @@ export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAn
               <span className="t-n">{i + 1}</span>
               <span className="t-frame"><SlideFrame><Slide slide={s} ctx={ctx(i + 1)} /></SlideFrame></span>
               {i === jonasAt && <span className="t-pres"><Avatar id="jm" size={20} /></span>}
-              {d.staleSections.includes(s.sectionId) && <span className="t-stale" title={t("Needs update")} />}
             </button>
           ))}
         </aside>
@@ -216,26 +198,35 @@ export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAn
 
         <aside className="panel">
           <section className="card pad">
-            <h2>{t("Ask for a change")}</h2>
+            <div className="ask-head"><h2><Sparkles size={15} /> {t("Ask AI")}</h2><div className="seg sm" role="radiogroup" aria-label={t("What should AI change?")}>{[['slide', 'This slide'], ['section', 'This section'], ['deck', 'Whole deck']].map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={scope === k} className={scope === k ? 'on' : ''} onClick={() => setScope(k)}>{t(l)}</button>)}</div></div>
             <form className="chat-in" onSubmit={(e) => { e.preventDefault(); assist(); }}>
-              <input value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder={t('Slide {n}: what should change?', { n: d.active + 1 })} aria-label={t("Ask for a change to this slide")} />
+              <input value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder={scope === 'slide' ? t('What should change on this slide?') : scope === 'section' ? t('What should change in this section?') : t('What should change in the whole deck?')} aria-label={t("Ask for a change to this slide")} />
               <button className="round solid sm" aria-label={t("Send")} disabled={busy}><Send size={15} /></button>
             </form>
             <div className="chips">{['Shorten the text', 'Add speaker notes', 'Make the title a conclusion'].map((c) => <button key={c} className="opt" onClick={() => assist(t(c))}>{t(c)}</button>)}</div>
-            {busy && <p className="working"><Loader2 size={14} className="spin" /> {t('Updating slide {n}…', { n: d.active + 1 })}</p>}
-            {log.map((l) => <p key={l.id} className="logline"><Check size={13} className="ok" /> {t('Slide {n}: “{text}”', { n: l.n, text: l.text })} <button className="textlink" onClick={() => undo(l)}><Undo2 size={12} /> {t("Undo")}</button></p>)}
+            {busy && <p className="working"><Loader2 size={14} className="spin" /> {t('Working…')}</p>}
+            {log.map((l) => <p key={l.id} className="logline"><Check size={13} className="ok" /> {t('“{text}”', { text: l.text })} <button className="textlink" onClick={() => undo(l)}><Undo2 size={12} /> {t("Undo")}</button></p>)}
           </section>
 
           <section className="card pad">
-            <div className="card-head"><h2>{t("Checks")}</h2><span className={`pill ${warnCount ? 'warn' : 'good'}`}>{warnCount ? t('{n} to look at', { n: warnCount }) : t('All clear')}</span></div>
-            <ul className="checks">
-              {checks.map((c, i) => (
-                <li key={i} className={c.k}>
-                  {c.k === 'ok' ? <Check size={15} /> : <AlertTriangle size={15} />}
-                  <span>{c.t}{c.act && <> <button className="textlink" onClick={() => gotoAnalysis(c.go)}>{c.act}</button></>}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="card-head"><h2>{t("Needs your attention")}</h2><span className={`pill ${warnCount ? 'warn' : 'good'}`}>{warnCount ? t('{n} to look at', { n: warnCount }) : t('All clear')}</span></div>
+            {items.length === 0 && <p className="muted small">{t('Every statement on the slides is backed by a source. You can download the draft any time.')}</p>}
+            {items.map((it) => (
+              <div key={it.id} className="attn-item">
+                <p><AlertTriangle size={14} /> {it.id === 'conflict' ? t('Two sources give different qualification costs. Which should the slides use?') : t('Capacity beyond 2029 is not covered by the sources.')}</p>
+                <div className="chips">
+                  {it.id === 'conflict' ? <>
+                    <button className="opt" onClick={() => decide('qc', '14.2')}>{qcText('14.2')}</button>
+                    <button className="opt" onClick={() => decide('qc', '15.1')}>{qcText('15.1')}</button>
+                    <button className="opt" onClick={() => decide('qc', 'range')}>{t('Show range')}</button>
+                  </> : <>
+                    <button className="opt" onClick={() => decide('gap', 'requested')}>{t('Ask Procurement')}</button>
+                    <button className="opt" onClick={() => decide('gap', 'assumption')}>{t('Treat as assumption')}</button>
+                    <button className="opt" onClick={() => decide('gap', 'open')}>{t('Leave open')}</button>
+                  </>}
+                </div>
+              </div>
+            ))}
           </section>
 
           <section className="card pad">
@@ -246,10 +237,10 @@ export default function StageReport({ ws, setDeck, onBuilt, updateSlides, gotoAn
       </div>
 
       <ActionBar>
-        <div className="ab-text"><strong>{warnCount ? t(warnCount > 1 ? '{n} checks to look at' : '{n} check to look at', { n: warnCount }) : t('Ready to export')}</strong><span>{t('You can export now and return to change anything. Version {v} stays a draft.', { v: ws.version })}</span></div>
-        <button className="btn quiet" onClick={onBack}><ArrowLeft size={16} /> {t("Analysis")}</button>
+        <div className="ab-text"><strong>{warnCount ? t(warnCount > 1 ? '{n} points need attention' : '{n} point needs attention', { n: warnCount }) : t('Ready to download')}</strong><span>{t('Nothing here stops you from downloading the draft.')}</span></div>
+        <button className="btn quiet" onClick={onBack}><ArrowLeft size={16} /> {t("Brief")}</button>
         <button className="btn" onClick={() => setPresent(true)}><Play size={15} /> {t("Present")}</button>
-        <button className="btn primary lg" onClick={() => setExporting(true)}><Download size={17} /> {t("Export")}</button>
+        <button className="btn primary lg" onClick={() => setExporting(true)}><Download size={17} /> {t("Download PowerPoint")}</button>
       </ActionBar>
 
       {present && <Present slides={d.slides} ctx={ctx(1)} start={d.active} onClose={() => setPresent(false)} />}

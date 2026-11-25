@@ -60,6 +60,10 @@ class Database:
             if v < 1:  # web research is on for every report from now on
                 conn.execute(text("UPDATE reports SET use_web = 1 WHERE use_web IS NULL OR use_web = 0"))
                 conn.execute(text("PRAGMA user_version = 1"))
+            if v < 2:  # the sign-offs are gone: a finished or revised report is simply a draft
+                conn.execute(text("UPDATE reports SET state = 'DECK_REVIEW', stage = 2 WHERE state IN ('FINAL', 'FEEDBACK')"))
+                conn.execute(text("UPDATE reports SET stage = 2 WHERE stage = 3 AND state IN ('GENERATING', 'DECK_REVIEW')"))
+                conn.execute(text("PRAGMA user_version = 2"))
 
     @contextmanager
     def session(self):

@@ -33,9 +33,10 @@ def research(c, base):
 
 def test_steps_are_refused_in_the_wrong_state(case):
     c, rid, base = case
-    assert c.post(f"{base}/findings/approve").status_code == 409
     assert c.get(f"{base}/deck/download").status_code == 404
-    assert c.post(f"{base}/deck/finalize").status_code == 409
+    assert c.post(f"{base}/deck/ask", json={"text": "Bitte kürzer fassen", "scope": "deck"}).status_code == 409  # nothing to change yet
+    assert c.post(f"{base}/deck/ask/undo").status_code == 409
+    assert c.post(f"{base}/findings/approve").status_code == 404 and c.post(f"{base}/deck/finalize").status_code == 404  # no sign-offs any more
     assert c.post(f"{base}/outline/approve").status_code == 409  # no outline yet
     assert c.patch(f"{base}/claims/k-nope", json={"status": "approved"}).status_code == 409
     c.post(f"{base}/outline/propose")
@@ -86,15 +87,17 @@ def test_calculations_are_code_and_charts_use_ledger_numbers(case):
     assert opt["charts"] and sorted(opt["charts"][0]["values"]) == [12.0, 15.5, 18.0]
 
 
-def test_edited_claim_is_reverified_and_a_blocker_stops_generation(case):
+def test_edited_claim_is_reverified_and_a_left_out_finding_is_listed_not_blocking(case):
     c, rid, base = case
     research(c, base)
     f = c.get(f"{base}/findings").json()
     claim = next(cl for s in f["sections"] if s["key"] == "optionen-und-kosten" for cl in s["claims"] if "Option A" in cl["text"])
     r = c.patch(f"{base}/claims/{claim['id']}", json={"text": "Option A kostet 99 Mio €."}).json()
     assert r["status"] == "flagged" and r["reverified"]["severity"] == "blocker"
-    blocked = c.post(f"{base}/findings/approve")
-    assert blocked.status_code == 409 and blocked.json()["items"]
+    # nothing stops the download; the finding that failed the check is listed as something to look at
+    todo = c.get(f"{base}/deck").json()["attention"]
+    assert any(i["kind"] == "claim" and i["id"] == claim["id"] for i in todo)
+    assert c.get(f"{base}/deck/download").status_code == 200
     # fixing the claim back to what the source says lifts the verifier flag
     ok = c.patch(f"{base}/claims/{claim['id']}", json={"text": "Option A kostet 12 Mio € über 24 Monate."}).json()
     assert ok["status"] == "verified"
@@ -102,14 +105,13 @@ def test_edited_claim_is_reverified_and_a_blocker_stops_generation(case):
     assert all(x["status"] == "resolved" for x in flags if x["severity"] == "blocker")
 
 
-def test_accepting_a_blocker_needs_a_reason_and_is_recorded(case):
+def test_resolving_a_flag_is_recorded_with_the_note_if_given(case):
     c, rid, base = case
     research(c, base)
     f = c.get(f"{base}/findings").json()
     claim = f["sections"][0]["claims"][0] if f["sections"][0]["claims"] else next(cl for s in f["sections"] for cl in s["claims"])
     c.patch(f"{base}/claims/{claim['id']}", json={"text": "Das Volumen beträgt 777 Stück."})
     flag = next(x for s in c.get(f"{base}/findings").json()["sections"] for x in s["flags"] if x["claim_id"] == claim["id"] and x["status"] == "open" and x["severity"] == "blocker")
-    assert c.post(f"{base}/flags/{flag['id']}/resolve", json={"resolution": "accepted"}).status_code == 409
     ok = c.post(f"{base}/flags/{flag['id']}/resolve", json={"resolution": "accepted", "note": "Zahl aus Telefonat mit dem Einkauf"})
     assert ok.status_code == 200
     ev = [e for e in c.get(f"{base}/events").json() if e["kind"] == "flag_resolved"]
@@ -117,13 +119,9 @@ def test_accepting_a_blocker_needs_a_reason_and_is_recorded(case):
 
 
 def approve_all(c, base):
-    f = c.get(f"{base}/findings").json()
-    for fl in [x for s in f["sections"] for x in s["flags"]] + f["general_flags"]:
-        if fl["severity"] == "blocker" and fl["status"] == "open":
-            c.post(f"{base}/flags/{fl['id']}/resolve", json={"resolution": "dismissed", "note": "geprüft"})
-    j = c.post(f"{base}/findings/approve")
-    assert j.status_code == 202, j.text
-    return c.get(f"{base}/jobs/{j.json()['job_id']}").json()
+    """There is no approval step any more: the research run ends with the draft of the slides."""
+    assert c.get(f"{base}/case").json()["state"] == "DECK_REVIEW"
+    return {"status": "done"}
 
 
 def _slide_texts(slide) -> str:
@@ -145,21 +143,23 @@ def test_deck_is_built_from_approved_claims_with_sources_and_native_chart(case):
     assert kinds[0] == "title" and "summary" in kinds and "decision" in kinds and kinds[-1] == "sources"
     assert d["has_file"] and all(b["claim_ids"] for s in d["slides"] if s["kind"] in ("content", "summary") for b in s["bullets"])
     prs = Presentation(io.BytesIO(c.get(f"{base}/deck/download").content))
-    assert len(prs.slides) == len(d["slides"])
+    shared = sum(1 for s in d["slides"] if s["shares_with_next"])
+    assert len(prs.slides) == len(d["slides"]) - shared == d["export"]["slides"]
     assert any(getattr(sh, "has_chart", False) and sh.has_chart for s in prs.slides for sh in s.shapes)
     notes = " ".join(s.notes_slide.notes_text_frame.text for s in prs.slides if s.has_notes_slide)
     assert "Belege:" in notes
-    # what the page shows is what the file contains: every title, bullet, key figure and table cell of every slide is in the PowerPoint slide
-    for ui, sl in zip(d["slides"], prs.slides):
-        text = _slide_texts(sl)
-        assert ui["title"] in text
+    # what the page shows is what the file contains: every title, bullet, key figure and table cell of every slide is in the PowerPoint file
+    # (a short slide that shares its page with the next section's slide is in the file under the combined slide)
+    all_text = "\n".join(_slide_texts(sl) for sl in prs.slides)
+    for ui in d["slides"]:
+        assert ui["title"] in all_text
         for b in ui["spec"]["blocks"]:
             if b["type"] == "bullets":
-                assert all(i["text"] in text for i in b["items"])
+                assert all(i["text"] in all_text for i in b["items"])
             elif b["type"] == "kpis":
-                assert all(i["value"] in text and i["label"] in text for i in b["items"])
+                assert all(i["value"] in all_text and i["label"] in all_text for i in b["items"])
             elif b["type"] == "table":
-                assert all(cell in text for row in b["rows"] for cell in row if cell)
+                assert all(cell in all_text for row in b["rows"] for cell in row if cell)
     # a user edit with a number that no verified claim contains is warned about
     sl = next(s for s in d["slides"] if s["kind"] == "content")
     w = c.patch(f"{base}/deck/slides/{sl['id']}", json={"bullets": ["Neue Zahl 777"]}).json()
@@ -201,20 +201,47 @@ def test_slide_edit_undo_add_move_delete_and_the_file_follows(case):
     assert rv["changed"] is False and rv["needs"]
 
 
-def test_feedback_creates_v2_carries_approved_claims_and_lists_changes(case):
+def test_ask_ai_on_a_section_rewrites_it_in_place_and_can_be_undone(case):
     c, rid, base = case
     research(c, base)
-    approve_all(c, base)
-    fb = c.post(f"{base}/feedback", json={"text": "Bei den Risiken ist die Aussage falsch, bitte korrigieren."}).json()
-    assert fb["changes"][0]["rerun_from"] == "analysis"
-    j = c.post(f"{base}/feedback/{fb['id']}/apply").json()["job_id"]
-    assert c.get(f"{base}/jobs/{j}").json()["status"] == "done"
-    assert c.get(f"{base}/case").json()["version"] == "v2"
-    with c.app.state.db.session() as s:
-        v1 = s.query(Claim).filter_by(report_id=rid, version_no=1, status="approved").count()
-        carried = s.query(Claim).filter(Claim.report_id == rid, Claim.version_no == 2, Claim.carried_from.isnot(None)).count()
-        assert carried and carried < v1 + 1  # unchanged sections carried forward; the re-analysed section was not copied
-        assert s.get(Report, rid).version_no == 2
+    d = c.get(f"{base}/deck").json()
+    sec = next(s["section_key"] for s in d["slides"] if s["kind"] == "content")
+    before = [s["spec"] for s in d["slides"] if s["section_key"] == sec]
+    assert c.post(f"{base}/deck/ask", json={"text": "ok", "scope": "section"}).status_code in (400, 422)  # a section is needed
+    r = c.post(f"{base}/deck/ask", json={"text": "Bitte die Aussage hier korrigieren, sie ist falsch.", "scope": "section", "section_key": sec}).json()
+    assert r["mode"] == "job" and r["rewrites"]
+    assert c.get(f"{base}/jobs/{r['job_id']}").json()["status"] == "done"
+    assert c.get(f"{base}/case").json()["state"] == "DECK_REVIEW" and c.get(f"{base}/case").json()["version"] == "v1"  # in place, no new version
+    after = c.get(f"{base}/deck").json()
+    assert [s for s in after["slides"] if s["section_key"] == sec] and after["ai_undo"]
+    u = c.post(f"{base}/deck/ask/undo").json()
+    assert u["undone"]
+    restored = [s["spec"] for s in c.get(f"{base}/deck").json()["slides"] if s["section_key"] == sec]
+    assert restored == before and c.get(f"{base}/deck").json()["ai_undo"] is None
+    # a request that names no section on the whole deck says what is missing instead of guessing
+    vague = c.post(f"{base}/deck/ask", json={"text": "Bitte alles besser machen", "scope": "deck"}).json()
+    assert vague["mode"] in ("none", "job")
+
+
+def test_downloading_is_recorded_and_is_the_only_closing_step(case):
+    c, rid, base = case
+    research(c, base)
+    assert c.get(f"{base}/deck/download").status_code == 200
+    ev = [e for e in c.get(f"{base}/events").json() if e["kind"] == "deck_exported"]
+    assert len(ev) == 1 and ev[0]["payload"]["slides"] >= 3
+    assert c.get(f"{base}/case").json()["state"] == "DECK_REVIEW"  # still a draft that can be changed and downloaded again
+
+
+def test_a_left_out_finding_is_taken_in_with_one_call(case):
+    c, rid, base = case
+    research(c, base)
+    f = c.get(f"{base}/findings").json()
+    claim = next(cl for s in f["sections"] if s["key"] == "optionen-und-kosten" for cl in s["claims"] if "Option A" in cl["text"])
+    c.patch(f"{base}/claims/{claim['id']}", json={"text": "Option A kostet 99 Mio €."})
+    r = c.post(f"{base}/claims/{claim['id']}/include").json()
+    assert r["mode"] == "slide"  # without a language model the slide editor says it could not work it in, but the finding is approved
+    assert not any(i["kind"] == "claim" and i["id"] == claim["id"] for i in c.get(f"{base}/deck").json()["attention"])
+    assert c.post(f"{base}/claims/{claim['id']}/include").status_code == 409  # already in
 
 
 def test_a_named_web_page_is_fetched_read_and_extracted_when_web_is_allowed(case):

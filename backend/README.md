@@ -24,26 +24,28 @@ Moving on: `DATABASE_URL` points the same tables at PostgreSQL; `app/core/storag
 for Azure Blob; `app/core/connectors.py` is where SharePoint, Exchange, Teams and SAP connectors go.
 
 ## Workflow (all under `/api/v1/reports/{id}`)
-State machine: `SETUP → OUTLINE_REVIEW → COLLECTING → ANALYSING → FINDINGS_REVIEW → GENERATING → DECK_REVIEW → FINAL → FEEDBACK → …`
-A step in the wrong state answers `409`.
+State machine: `SETUP → OUTLINE_REVIEW → COLLECTING → ANALYSING → (FINDINGS_REVIEW, transient) → GENERATING → DECK_REVIEW`. There is no final state:
+the draft in `DECK_REVIEW` is saved as it is edited, and downloading it is recorded (`deck_exported`). A step in the wrong state answers `409`.
 
 | Step | Endpoint | Agent(s) |
 |---|---|---|
 | brief, files | `PUT /case`, `POST /files` (role template / source / prior_report) | – |
 | outline | `POST /outline/propose`, `PUT /outline` | template-analyst |
 | interview | `POST /interview/turn` | interviewer |
-| **checkpoint 1** | `POST /outline/approve` → job | document-reader (scans, images), evidence-extractor (all text, in blocks) for the author's own material first, then source-planner (plan for this topic), web-search*, source-screener, a gap round (source-planner in gaps mode), asset-analyst (vision), asset-curator, then per section section-analyst (plan, write) + verifier (max 2 rounds), then red-team |
-| **checkpoint 2** | `GET /findings`, `PATCH /claims/{id}`, `POST /flags/{id}/resolve`, `POST /findings/approve` → job | verifier again on edited claims; storyline-architect, slide-writer |
-| **checkpoint 3** | `GET /deck`, `PATCH /deck/slides/{id}` (the whole slide spec), `POST /deck/slides/{id}/revise` (a comment), `POST .../undo`, `POST /deck/slides`, `PUT .../position`, `DELETE`, `GET /deck/download`, `POST /deck/finalize`; layouts: `GET /api/v1/slide-layouts` | slide-editor (PowerPoint is built by code from the same slide JSON) |
-| next version | `POST /feedback`, `POST /feedback/{id}/apply` → job | feedback-interpreter, then only what the feedback touches |
+| **approve the outline = the draft is made** | `POST /outline/approve` → one job | document-reader (scans, images), evidence-extractor (all text, in blocks) for the author's own material first, then source-planner (plan for this topic), web-search*, source-screener, a gap round (source-planner in gaps mode), asset-analyst (vision), asset-curator, then per section section-analyst (plan, write) + verifier (max 2 rounds), red-team over the whole draft, then storyline-architect and slide-writer (verified claims are taken in automatically; the rest stay out of the slides and are listed) |
+| evidence | `GET /findings`, `PATCH /claims/{id}`, `POST /claims/{id}/include` (take a left-out finding into its slide), `POST /flags/{id}/resolve` (a note is optional) | verifier again on edited claims; slide-editor for `include` |
+| the draft | `GET /deck` (slides with their claims, evidence and calculations, `attention`, `export`, `ai_undo`), `PATCH /deck/slides/{id}` (the whole slide spec), `POST /deck/slides/{id}/revise`, `POST .../undo`, `POST /deck/slides`, `PUT .../position`, `DELETE`, `GET /deck/download`; layouts: `GET /api/v1/slide-layouts` | slide-editor (PowerPoint is built by code from the same slide JSON) |
+| Ask AI | `POST /deck/ask` `{text, scope: slide \| section \| deck, slide_id, section_key}` → a slide answers at once, a section or the whole deck runs as a job; `POST /deck/ask/undo` (one step) | slide-editor (slide) or feedback-interpreter, then only what the request touches is re-researched and re-written |
+| rebuild | `POST /deck/build` (retry after a failed job), `POST /research/rerun` | – |
 | audit | `GET /events`, `GET /agent-runs?io=true`, `GET /agent-runs/summary`, `GET /sources`, `GET /jobs/{id}`; status for the page: `GET /api/v1/system/status` | – |
 
 \* on unless the report has web research switched off (`use_web`, default on); `ALLOW_WEB` (default true) only decides whether cited pages are fetched and read in full; links named in the brief are fetched when it is on.
 
-Rules the orchestrator enforces: generation is blocked while a **blocker** flag is open (a blocker can be accepted only
-with a written reason, which is kept); edited claims are verified again; every slide bullet must point to an approved claim;
+Rules the orchestrator enforces: nothing blocks the author (an open flag or a claim the verifier did not support is shown under *needs attention*, and the claim stays out of the slides); edited claims are verified again; every slide bullet must point to an approved claim;
 chart numbers must be numbers from the ledger; calculations are computed by `app/core/calc.py`, not by a model;
-v2 starts as a copy of v1's approved claims and slides, and only the sections the feedback touches are redone.
+Ask AI on a section or the whole deck first stores a snapshot (the last 5 are kept) and then redoes only what it touches; hand edits in a re-written section are replaced, `POST /deck/ask/undo` restores them.
+
+**Export packing** (`app/core/slides/pack.py`, PowerPoint only; the web view keeps one slide per section slide): consecutive text slides of different sections share a page while the first is less than 75% full and the sum fits (at most 3 parts, 10 lines); each part's title becomes a bold heading line. `deck_view` reports `shares_with_next` and `export.slides` so the screen says how many pages the file will have.
 
 ## Settings
 See `.env.example`: services, storage, `ALLOW_WEB`, `GAP_ROUNDS`, `MAX_ASSETS_ANALYSED`, and the reading limits `PARALLEL_CALLS`, `MAX_VISION_PAGES`, `EXTRACT_BATCH_CHARS`, `MAX_EXTRACT_CHARS`, `PASSAGE_CHARS`.

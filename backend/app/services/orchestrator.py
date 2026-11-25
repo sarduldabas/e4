@@ -1,4 +1,5 @@
-"""The orchestrator: owns the case state, decides what runs next, enforces the three checkpoints.
+"""The orchestrator: owns the case state and decides what runs next. One checkpoint remains: the author approves the outline. After that the research,
+the slides and every edit run in one draft that saves itself; downloading the file is recorded.
 Plain Python, no agent framework. Agents are called only through `ctx.runner`, never by each other."""
 from __future__ import annotations
 
@@ -138,36 +139,62 @@ class Orchestrator:
         return outline_svc.get_interview(self.ctx, rid)
 
     def approve_outline(self, rid: str) -> str:
-        """Checkpoint 1. Starts collecting and analysing; the job ends at checkpoint 2."""
+        """The author approves the outline: research, analysis and the first draft of the slides are made in one run."""
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            if r.state not in ("OUTLINE_REVIEW", "COLLECTING", "ANALYSING", "FINDINGS_REVIEW"):
+            if r.state not in ("OUTLINE_REVIEW", "COLLECTING", "ANALYSING"):
                 raise StateError(f"the outline can not be approved in state {r.state}")
             if not outline(s, rid):
                 raise Blocked("the outline has no sections")
-            if r.state == "FINDINGS_REVIEW":
-                raise StateError("research already done; use re-run")
             log_event(s, rid, "outline_approved", sections=len(outline(s, rid)))
 
         def job(prog: Progress) -> None:
             collect.run_collect(self.ctx, rid, prog)
             analyse.run_analyse(self.ctx, rid, prog)
+            self._build(rid, prog)
 
         return self.ctx.jobs.submit(rid, "research", job)
 
-    def rerun_research(self, rid: str, sections: list[str] | None = None) -> str:
+    def _build(self, rid: str, prog: Progress, only: list[str] | None = None) -> None:
+        """Findings that the verifier supports are taken in and the slides are written. No approval in between."""
+        generate.auto_approve(self.ctx, rid, only=only)
+        try:
+            generate.run_generate(self.ctx, rid, prog, only=only)
+        except Exception:
+            feedback.recover_state(self.ctx, rid)
+            raise
+
+    def build_deck(self, rid: str) -> str:
+        """Writes the slides again from what has been found (after a failed attempt, or when slides are missing)."""
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            require_state(r, "FINDINGS_REVIEW", "COLLECTING", "ANALYSING")
+            require_state(r, "FINDINGS_REVIEW", "DECK_REVIEW")
+        return self.ctx.jobs.submit(rid, "generate", lambda prog: self._build(rid, prog, None))
+
+    def rerun_research(self, rid: str, sections: list[str] | None = None) -> str:
+        """Research and write one section (or all) again; the slides of those sections are replaced, the rest of the draft stays."""
+        with self.ctx.db.session() as s:
+            r = get_report(s, rid)
+            require_state(r, "FINDINGS_REVIEW", "DECK_REVIEW", "COLLECTING", "ANALYSING")
             log_event(s, rid, "rerun", sections=sections or "all")
+            had_slides = s.query(Slide).filter_by(report_id=rid, version_no=r.version_no).count() > 0
+        label = ", ".join(sections) if sections else "all"
 
         def job(prog: Progress) -> None:
-            collect.run_collect(self.ctx, rid, prog, only=sections)
-            analyse.run_analyse(self.ctx, rid, prog, only=sections)
+            if had_slides:
+                feedback.snapshot(self.ctx, rid, sections or [o["key"] for o in self.get_outline(rid)], f"research again: {label}"[:120])
+            try:
+                collect.run_collect(self.ctx, rid, prog, only=sections)
+                analyse.run_analyse(self.ctx, rid, prog, only=sections)
+                generate.auto_approve(self.ctx, rid, only=sections)
+                generate.run_generate(self.ctx, rid, prog, only=sections)
+            except Exception:
+                feedback.recover_state(self.ctx, rid)
+                raise
 
         return self.ctx.jobs.submit(rid, "research", job)
 
-    # ------------------------------------------------------------------ checkpoint 2: findings
+    # ------------------------------------------------------------------ the evidence behind the slides
     def findings(self, rid: str) -> dict:
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
@@ -200,7 +227,7 @@ class Orchestrator:
     def update_claim(self, rid: str, claim_id: str, text: str | None = None, status: str | None = None) -> dict:
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            require_state(r, "FINDINGS_REVIEW")
+            require_state(r, "FINDINGS_REVIEW", "DECK_REVIEW")
             c = s.get(Claim, claim_id)
             if not c or c.report_id != rid or c.version_no != r.version_no:
                 raise NotFound(claim_id)
@@ -234,12 +261,10 @@ class Orchestrator:
             raise ValueError("resolution must be accepted, dismissed or rejected")
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            require_state(r, "FINDINGS_REVIEW")
+            require_state(r, "FINDINGS_REVIEW", "DECK_REVIEW")
             f = s.get(Flag, flag_id)
             if not f or f.report_id != rid:
                 raise NotFound(flag_id)
-            if f.severity == "blocker" and resolution in ("accepted", "dismissed") and not (note and note.strip()):
-                raise Blocked("a blocker can only be accepted with a short reason (it is kept in the record)")
             if resolution == "rejected":
                 if not f.claim_id:
                     raise ValueError("only a flag on a claim can be resolved by rejecting the claim")
@@ -253,25 +278,29 @@ class Orchestrator:
             log_event(s, rid, "flag_resolved", flag=flag_id, resolution=resolution, severity=f.severity, note=note)
             return self._flag_view(f)
 
-    def approve_findings(self, rid: str) -> str:
-        """Checkpoint 2. Blocked while any blocker flag is open. Starts slide generation."""
+    def include_claim(self, rid: str, claim_id: str) -> dict:
+        """A finding the verifier left out is taken in: it becomes an approved claim and the slide editor works it into the section's last slide."""
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            require_state(r, "FINDINGS_REVIEW")
-            blockers = open_blockers(s, rid, r.version_no)
-            if blockers:
-                raise Blocked(f"{len(blockers)} blocker(s) must be resolved first", [self._flag_view(f) for f in blockers])
-            n = 0
-            for c in current_claims(s, rid, r.version_no, None, ("verified", "approved")):
-                if c.status != "approved":
-                    c.status, n = "approved", n + 1
-            if not s.query(Claim).filter_by(report_id=rid, version_no=r.version_no, status="approved").count():
-                raise Blocked("there is no approved claim: the deck would be empty")
-            log_event(s, rid, "findings_approved", claims=n, version=r.version_no)
-        instr = feedback.pending_instructions(self.ctx, rid)
-        return self.ctx.jobs.submit(rid, "generate", lambda prog: generate.run_generate(self.ctx, rid, prog, instructions=instr or None))
+            require_state(r, "DECK_REVIEW")
+            c = s.get(Claim, claim_id)
+            if not c or c.report_id != rid or c.version_no != r.version_no:
+                raise NotFound(claim_id)
+            if c.status not in ("flagged", "verified", "draft"):
+                raise StateError("this finding is already part of the draft or was removed")
+            c.status = "approved"
+            for f in s.query(Flag).filter_by(report_id=rid, claim_id=claim_id, status="open").all():
+                f.status, f.resolution, f.note = "resolved", "accepted", "taken in by the author"
+            log_event(s, rid, "claim_included", claim=claim_id)
+            text, key, lang = c.text, c.section_key, r.lang
+            last = [x for x in slides_service.ordered(s, rid, r.version_no) if x.section_key == key and x.kind == "content"]
+            target = last[-1].id if last else None
+        if target is None:
+            return {"mode": "job", "job_id": self.ctx.jobs.submit(rid, "generate", lambda prog: generate.run_generate(self.ctx, rid, prog, only=[key]))}
+        instr = ("Nimm diese belegte Aussage auf der Folie auf: " if lang == "de" else "Work this verified finding into the slide: ") + text
+        return feedback.slide_result(slides_service.revise_slide(self.ctx, rid, target, instr))
 
-    # ------------------------------------------------------------------ checkpoint 3: deck
+    # ------------------------------------------------------------------ the draft
     def deck(self, rid: str) -> dict:
         return slides_service.deck_view(self.ctx, rid)
 
@@ -307,7 +336,7 @@ class Orchestrator:
         return section_order
 
     def deck_file(self, rid: str) -> tuple[str, bytes]:
-        """The PowerPoint file is built from the slides as they are now, so the download always equals what the page shows."""
+        """The PowerPoint file is built from the slides as they are now (short sections share a page, see core/slides/pack.py)."""
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
             d = s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first()
@@ -317,27 +346,17 @@ class Orchestrator:
         generate.build_deck_file(self.ctx, rid)
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
-            key = s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first().key
+            d = s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first()
+            key = d.key
+            r.status = "Presented"
+            log_event(s, rid, "deck_exported", version=r.version, slides=d.slide_count)  # the downloaded state is the final version: no separate approval
         return name, self.ctx.store.get(key)
 
-    def finalize(self, rid: str) -> dict:
-        """Checkpoint 3."""
-        with self.ctx.db.session() as s:
-            r = get_report(s, rid)
-            require_state(r, "DECK_REVIEW")
-            if not s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first():
-                raise Blocked("there is no deck to finalise")
-            set_state(s, r, "FINAL")
-            r.status = "Presented"
-            log_event(s, rid, "deck_final", version=r.version)
-        return self.case(rid)
+    def ask_ai(self, rid: str, text: str, scope: str, slide_id: str | None = None, section_key: str | None = None) -> dict:
+        return feedback.ask(self.ctx, rid, text, scope, slide_id, section_key)
 
-    # ------------------------------------------------------------------ feedback and the next version
-    def submit_feedback(self, rid: str, text: str, selected_slide_id: str | None = None) -> dict:
-        return feedback.interpret(self.ctx, rid, text, selected_slide_id)
-
-    def apply_feedback(self, rid: str, feedback_id: str) -> str:
-        return self.ctx.jobs.submit(rid, "feedback", lambda prog: feedback.run_feedback(self.ctx, rid, prog, feedback_id))
+    def undo_ask_ai(self, rid: str) -> dict:
+        return feedback.undo_ask(self.ctx, rid)
 
     # ------------------------------------------------------------------ audit
     def events(self, rid: str) -> list[dict]:

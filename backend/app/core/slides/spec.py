@@ -51,11 +51,12 @@ def _block(raw: dict, slot: str, lim: dict, box: dict, warnings: list[str]) -> d
         return None
     if t == "bullets":
         items = []
-        for it in (raw.get("items") or [])[: lim[slot]]:
-            it = {"text": it} if isinstance(it, str) else it
+        raw_items = [({"text": it} if isinstance(it, str) else it) for it in (raw.get("items") or [])]
+        cap = lim[slot] + sum(1 for it in raw_items if it.get("heading"))  # a heading line (sections sharing a slide) is not a point
+        for it in raw_items[:cap]:
             text = _s(it.get("text"), lim["bullet_chars"])
             if text:
-                items.append({"text": text, "claim_ids": _ids(it.get("claim_ids")), "level": 1 if it.get("level") == 1 else 0})
+                items.append({"text": text, "claim_ids": _ids(it.get("claim_ids")), "level": 1 if it.get("level") == 1 else 0, **({"heading": True} if it.get("heading") else {})})
         if not items:
             return None
         size, ok = fit.bullets_size([i["text"] for i in items], box["w"], box["h"])

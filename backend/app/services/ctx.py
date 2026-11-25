@@ -16,18 +16,18 @@ from .jobs import JobRunner
 from .runner import AgentsRunner
 
 # ---------------------------------------------------------------- state machine
-STATES = ["SETUP", "OUTLINE_REVIEW", "COLLECTING", "ANALYSING", "FINDINGS_REVIEW", "GENERATING", "DECK_REVIEW", "FINAL", "FEEDBACK"]
-STAGE_OF = {"SETUP": 1, "OUTLINE_REVIEW": 1, "COLLECTING": 2, "ANALYSING": 2, "FINDINGS_REVIEW": 2, "GENERATING": 3, "DECK_REVIEW": 3, "FINAL": 3, "FEEDBACK": 3}
+STATES = ["SETUP", "OUTLINE_REVIEW", "COLLECTING", "ANALYSING", "FINDINGS_REVIEW", "GENERATING", "DECK_REVIEW"]
+# Stage 1 is the brief, stage 2 is the draft: research, slides and every edit happen in one place. There is no sign-off between them:
+# the last saved state of the draft is the final version, and downloading it is recorded in the audit trail.
+STAGE_OF = {"SETUP": 1, "OUTLINE_REVIEW": 1, "COLLECTING": 2, "ANALYSING": 2, "FINDINGS_REVIEW": 2, "GENERATING": 2, "DECK_REVIEW": 2}
 TRANSITIONS = {
     "SETUP": {"OUTLINE_REVIEW"},
     "OUTLINE_REVIEW": {"OUTLINE_REVIEW", "COLLECTING"},
     "COLLECTING": {"ANALYSING", "OUTLINE_REVIEW"},  # a failed collection goes back so the user can retry
     "ANALYSING": {"FINDINGS_REVIEW", "COLLECTING"},
-    "FINDINGS_REVIEW": {"FINDINGS_REVIEW", "GENERATING", "COLLECTING", "ANALYSING"},
+    "FINDINGS_REVIEW": {"FINDINGS_REVIEW", "GENERATING", "COLLECTING", "ANALYSING"},  # transient: the slides are built straight away
     "GENERATING": {"DECK_REVIEW", "FINDINGS_REVIEW"},
-    "DECK_REVIEW": {"DECK_REVIEW", "FINAL", "FEEDBACK", "GENERATING"},
-    "FINAL": {"FEEDBACK"},
-    "FEEDBACK": {"FEEDBACK", "COLLECTING", "ANALYSING", "FINDINGS_REVIEW", "GENERATING", "DECK_REVIEW"},
+    "DECK_REVIEW": {"DECK_REVIEW", "GENERATING", "COLLECTING", "ANALYSING"},  # a section can be researched or written again from the draft
 }
 
 

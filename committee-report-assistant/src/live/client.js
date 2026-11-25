@@ -58,7 +58,7 @@ export const api = {
   researchPlan: (rid) => get(`${R(rid)}/research-plan`),
   assets: (rid) => get(`${R(rid)}/assets`),
   patchAsset: (rid, id, body) => patch(`${R(rid)}/assets/${id}`, body),
-  // checkpoint 1
+  // brief
   proposeOutline: (rid) => post(`${R(rid)}/outline/propose`),
   outline: (rid) => get(`${R(rid)}/outline`),
   putOutline: (rid, sections) => put(`${R(rid)}/outline`, sections),
@@ -66,12 +66,13 @@ export const api = {
   turn: (rid, text, done = false) => post(`${R(rid)}/interview/turn`, { text, done }),
   approveOutline: (rid) => post(`${R(rid)}/outline/approve`),
   rerun: (rid, sections) => post(`${R(rid)}/research/rerun`, sections ? { sections } : {}),
-  // checkpoint 2
+  // the evidence behind the draft
   findings: (rid) => get(`${R(rid)}/findings`),
   patchClaim: (rid, id, body) => patch(`${R(rid)}/claims/${id}`, body),
   resolveFlag: (rid, id, resolution, note) => post(`${R(rid)}/flags/${id}/resolve`, { resolution, note }),
-  approveFindings: (rid) => post(`${R(rid)}/findings/approve`),
-  // checkpoint 3
+  includeClaim: (rid, id) => post(`${R(rid)}/claims/${id}/include`),
+  buildDeck: (rid) => post(`${R(rid)}/deck/build`),
+  // the draft
   deck: (rid) => get(`${R(rid)}/deck`),
   patchSlide: (rid, id, spec) => patch(`${R(rid)}/deck/slides/${id}`, { spec }),
   addSlide: (rid, after, layout) => post(`${R(rid)}/deck/slides`, { after, layout }),
@@ -79,15 +80,14 @@ export const api = {
   undoSlide: (rid, id) => post(`${R(rid)}/deck/slides/${id}/undo`),
   moveSlide: (rid, id, index) => put(`${R(rid)}/deck/slides/${id}/position`, { index }),
   deleteSlide: (rid, id) => del(`${R(rid)}/deck/slides/${id}`),
-  finalize: (rid) => post(`${R(rid)}/deck/finalize`),
+  ask: (rid, body) => post(`${R(rid)}/deck/ask`, body),
+  undoAsk: (rid) => post(`${R(rid)}/deck/ask/undo`),
   downloadDeck: async (rid) => {
     const res = await fetch(`${BASE}${R(rid)}/deck/download`);
     if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
     const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'report.pptx';
     return { name, blob: await res.blob() };
   },
-  feedback: (rid, text, selected_slide_id) => post(`${R(rid)}/feedback`, { text, selected_slide_id: selected_slide_id || null }),
-  applyFeedback: (rid, id) => post(`${R(rid)}/feedback/${id}/apply`),
   assetUrl: (rid, id) => `${BASE}${R(rid)}/assets/${id}`,
   // audit
   events: (rid) => get(`${R(rid)}/events`),

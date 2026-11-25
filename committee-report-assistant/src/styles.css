@@ -642,3 +642,12 @@ textarea.notes { height: auto; padding: 10px 14px; line-height: 1.5; resize: ver
 .agent-tag svg { color: var(--accent); }
 .strength-top > svg { flex: none; }
 .strength-top > div { min-width: 0; }
+
+/* Demo draft: Ask AI header and attention items */
+.ask-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.ask-head h2 { display: flex; align-items: center; gap: 7px; margin: 0; }
+.ask-head .seg { align-self: flex-start; }
+.ask-head .seg button { padding: 5px 12px; font-size: 13px; white-space: nowrap; }
+.attn-item { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.attn-item p { display: flex; gap: 7px; align-items: flex-start; margin: 0; font-size: 14px; line-height: 1.4; }
+.attn-item p svg { flex: none; margin-top: 2px; color: var(--warn); }

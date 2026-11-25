@@ -7,8 +7,7 @@ import ModeToggle from './ModeToggle.jsx';
 import { api } from './client.js';
 import { errText, Spin, useAction, useCase } from './kit.jsx';
 import LiveBrief from './LiveBrief.jsx';
-import LiveAnalysis from './LiveAnalysis.jsx';
-import LiveReport from './LiveReport.jsx';
+import LiveDraft from './LiveDraft.jsx';
 import LiveAudit from './LiveAudit.jsx';
 import './live.css';
 
@@ -45,7 +44,7 @@ function StatusBanner({ st, check }) {
 function LiveBar({ c, tab, setTab, onHome, lang, setLang, mode, setMode, st }) {
   const reached = c?.stage || 1;
   const steps = [
-    { id: 'brief', n: 1, label: 'Brief' }, { id: 'analysis', n: 2, label: 'Analysis' }, { id: 'report', n: 3, label: 'Report' },
+    { id: 'brief', n: 1, label: 'Brief' }, { id: 'draft', n: 2, label: 'Draft' },
   ];
   return (
     <header className="topbar">
@@ -85,10 +84,10 @@ function LiveBar({ c, tab, setTab, onHome, lang, setLang, mode, setMode, st }) {
 }
 
 const STATE_DE = {
-  SETUP: 'Brief', OUTLINE_REVIEW: 'Gliederung', COLLECTING: 'Recherche', ANALYSING: 'Analyse', FINDINGS_REVIEW: 'Prüfung', GENERATING: 'Folien', DECK_REVIEW: 'Folienprüfung', FINAL: 'Final', FEEDBACK: 'Rückmeldung',
+  SETUP: 'Brief', OUTLINE_REVIEW: 'Gliederung', COLLECTING: 'Recherche', ANALYSING: 'Analyse', FINDINGS_REVIEW: 'Folien', GENERATING: 'Folien', DECK_REVIEW: 'Entwurf',
 };
 const STATE_EN = {
-  SETUP: 'Brief', OUTLINE_REVIEW: 'Outline', COLLECTING: 'Research', ANALYSING: 'Analysis', FINDINGS_REVIEW: 'Review', GENERATING: 'Slides', DECK_REVIEW: 'Slide review', FINAL: 'Final', FEEDBACK: 'Feedback',
+  SETUP: 'Brief', OUTLINE_REVIEW: 'Outline', COLLECTING: 'Research', ANALYSING: 'Analysis', FINDINGS_REVIEW: 'Slides', GENERATING: 'Slides', DECK_REVIEW: 'Draft',
 };
 export const stateLabel = (s) => (t('Language') === 'Sprache' ? STATE_DE : STATE_EN)[s] || s;
 
@@ -137,7 +136,7 @@ function LiveHome({ onOpen, toast, lang, setLang, mode, setMode, st, check }) {
                   <button className="lv-rep-main" onClick={() => onOpen(r.id)}>
                     <strong>{r.title}</strong><span className="muted small">{[r.committee, r.date, r.version].filter(Boolean).join(' · ')}</span>
                   </button>
-                  <span className="pill info">{t('Step {n}', { n: r.stage })}</span>
+                  <span className="pill info">{r.stage >= 2 ? t('Draft') : t('Brief')}</span>
                   <button className="iconbtn" title={t('Delete')} onClick={() => window.confirm(t('Delete this report with all its files and results?')) && run('del', async () => { await api.deleteReport(r.id); load(); })}><Trash2 size={16} /></button>
                 </div>
               ))}
@@ -167,7 +166,7 @@ function Workspace({ rid, tab, setTab, home, layouts, lang, setLang, mode, setMo
   const go = useCallback((id) => { setTab(id); window.scrollTo({ top: 0 }); }, [setTab]);
   // a report that is further along opens on its current step
   const [placed, setPlaced] = useState(false);
-  useEffect(() => { if (c && !placed) { setPlaced(true); setTab(['brief', 'brief', 'analysis', 'report'][c.stage] || 'brief'); } }, [c, placed, setTab]);
+  useEffect(() => { if (c && !placed) { setPlaced(true); setTab(['brief', 'brief', 'draft'][c.stage] || 'brief'); } }, [c, placed, setTab]);
   if (err?.status === 404) { home(); return null; }
   return (
     <>
@@ -176,8 +175,7 @@ function Workspace({ rid, tab, setTab, home, layouts, lang, setLang, mode, setMo
       {!c ? <div className="lv-stage"><p className="muted"><Spin /> {err ? errText(err) : t('Loading…')}</p></div> : (
         <div className="stage-anim" key={tab}>
           {tab === 'brief' && <LiveBrief rid={rid} c={c} reload={reload} lang={lang} st={st} toast={toast} go={go} />}
-          {tab === 'analysis' && <LiveAnalysis rid={rid} c={c} reload={reload} toast={toast} go={go} />}
-          {tab === 'report' && <LiveReport rid={rid} c={c} reload={reload} layouts={layouts} lang={lang} toast={toast} go={go} />}
+          {tab === 'draft' && <LiveDraft rid={rid} c={c} reload={reload} layouts={layouts} lang={lang} toast={toast} go={go} />}
           {tab === 'audit' && <LiveAudit rid={rid} c={c} toast={toast} />}
         </div>
       )}

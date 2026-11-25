@@ -33,7 +33,7 @@ class ReportsService:
                 for r in REPORTS:
                     s.add(ReportRow(id=r["id"], title=r["title"], committee=r["committee"], committee_id=next((c["id"] for c in COMMITTEES if c["name"] == r["committee"]), None),
                                     date=r["date"], version=r["version"], version_no=int(r["version"].lstrip("v") or 1), status=r["status"], stage=r["stage"],
-                                    state={1: "SETUP", 2: "FINDINGS_REVIEW", 3: "FINAL"}.get(r["stage"], "SETUP"), people=r["people"], topic=r["title"]))
+                                    state={1: "SETUP", 2: "FINDINGS_REVIEW", 3: "DECK_REVIEW"}.get(r["stage"], "SETUP"), people=r["people"], topic=r["title"]))
 
     def committees(self) -> list[Committee]:
         with self.db.session() as s:

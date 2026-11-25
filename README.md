@@ -19,8 +19,9 @@ Three services. The front end only talks to the backend; the backend is the only
 | `agents/` | FastAPI | 8002 | The **18 agents** (Brief, reading, research, analysis, slides; stateless, JSON in / JSON out). Each runs on your model (Foundry) or on a built-in rules version |
 
 The **orchestrator** (plain Python state machine and job runner) lives in the backend. Agents never call each other; the orchestrator
-calls them in order, keeps all state in the **case workspace** (database + files, see `backend/README.md`) and enforces the three
-checkpoints (outline, findings, deck).
+calls them in order and keeps all state in the **case workspace** (database + files, see `backend/README.md`). The author does two things:
+write the **brief** (and approve the outline), then work in one **draft** where research, analysis and slides come together. There
+are no sign-offs: everything is saved as the author works, the saved draft is the final version, and downloading it is recorded.
 
 ## Run it
 
@@ -76,8 +77,8 @@ python e2e/make_samples.py sample-data          # template, offer (docx), cost m
 python e2e/run_e2e.py --keep                    # starts both services on free ports, runs every step with checks, keeps e2e/out/deck_v1.pptx, deck_v2.pptx
 python e2e/run_e2e.py --url http://localhost:8001   # same flow against the services you started (leaves a report in your database)
 ```
-The run covers: upload -> outline -> interview -> research -> findings (a wrong number is flagged and blocks generation) -> deck with
-native chart and sources slide -> feedback -> version 2 with a "changes since v1" slide. It needs no model: agents run in rules mode.
+The run covers: upload -> outline -> interview -> research, analysis and deck in one go -> a wrong number is flagged and kept out of the
+slides -> slide edit -> Ask AI on a section with undo -> PowerPoint with native chart, sources slide and short sections sharing a page. It needs no model: agents run in rules mode.
 With your Foundry settings in `agents/.env` the same script runs on the model (`info agent modes used` shows which).
 
 ## Local first, Foundry later

@@ -1,4 +1,4 @@
-"""The report workflow: files, outline, interview, research, findings, deck, feedback. All state lives in the ledger."""
+"""The report workflow: files, outline, interview, then one draft (research, slides, edits, Ask AI, download). All state lives in the ledger."""
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
@@ -71,9 +71,11 @@ class OrderIn(BaseModel):
     sections: list[str]
 
 
-class FeedbackIn(BaseModel):
+class AskIn(BaseModel):
     text: str = Field(min_length=3, max_length=4000)
-    selected_slide_id: str | None = None
+    scope: str = Field(default="slide", pattern="^(slide|section|deck)$")
+    slide_id: str | None = None
+    section_key: str | None = None
 
 
 class RerunIn(BaseModel):
@@ -139,12 +141,12 @@ def turn(rid: str, body: TurnIn, request: Request):
     return orch(request).interview(rid, body.text, body.done)
 
 
-@router.post("/outline/approve", status_code=202, summary="Checkpoint 1: approve the outline; starts research and analysis")
+@router.post("/outline/approve", status_code=202, summary="Approve the outline: research, analysis and the first draft of the slides run in one go")
 def approve_outline(rid: str, request: Request):
     return {"job_id": orch(request).approve_outline(rid)}
 
 
-@router.post("/research/rerun", status_code=202)
+@router.post("/research/rerun", status_code=202, summary="Research and write some sections (or all) again; the slides of those sections are replaced")
 def rerun(rid: str, request: Request, body: RerunIn | None = None):
     return {"job_id": orch(request).rerun_research(rid, body.sections if body else None)}
 
@@ -154,7 +156,7 @@ def job(rid: str, job_id: str, request: Request):
     return orch(request).job(rid, job_id)
 
 
-# --- checkpoint 2
+# --- the evidence behind the draft
 @router.get("/findings", summary="Sections with claims, evidence, calculations and flags")
 def findings(rid: str, request: Request):
     return orch(request).findings(rid)
@@ -170,12 +172,17 @@ def resolve(rid: str, flag_id: str, body: FlagResolve, request: Request):
     return orch(request).resolve_flag(rid, flag_id, body.resolution, body.note)
 
 
-@router.post("/findings/approve", status_code=202, summary="Checkpoint 2: approve findings; blocked while blocker flags are open")
-def approve_findings(rid: str, request: Request):
-    return {"job_id": orch(request).approve_findings(rid)}
+@router.post("/claims/{claim_id}/include", summary="Take a finding that the verifier left out into the draft")
+def include_claim(rid: str, claim_id: str, request: Request):
+    return orch(request).include_claim(rid, claim_id)
 
 
-# --- checkpoint 3
+@router.post("/deck/build", status_code=202, summary="Write the slides again from the findings (after a failed attempt)")
+def build_deck(rid: str, request: Request):
+    return {"job_id": orch(request).build_deck(rid)}
+
+
+# --- the draft
 @router.get("/deck")
 def deck(rid: str, request: Request):
     return orch(request).deck(rid)
@@ -243,27 +250,21 @@ def order(rid: str, body: OrderIn, request: Request):
     return {"sections": orch(request).reorder_slides(rid, body.sections)}
 
 
-@router.get("/deck/download", summary="The PowerPoint file of the current version")
+@router.get("/deck/download", summary="The PowerPoint file of the draft as it is now. Downloading is recorded; there is no separate approval.")
 def download(rid: str, request: Request):
     name, data = orch(request).deck_file(rid)
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-@router.post("/deck/finalize", summary="Checkpoint 3: the deck is final")
-def finalize(rid: str, request: Request):
-    return orch(request).finalize(rid)
+@router.post("/deck/ask", summary="Ask AI: a request in plain words about one slide (done at once), one section or the whole deck (a background job)")
+def ask_ai(rid: str, body: AskIn, request: Request):
+    return orch(request).ask_ai(rid, body.text, body.scope, body.slide_id, body.section_key)
 
 
-# --- feedback -> next version
-@router.post("/feedback", summary="Feedback-interpreter: turn free text into changes (nothing is changed yet)")
-def feedback(rid: str, body: FeedbackIn, request: Request):
-    return orch(request).submit_feedback(rid, body.text, body.selected_slide_id)
-
-
-@router.post("/feedback/{feedback_id}/apply", status_code=202, summary="Start the next version with these changes")
-def apply_feedback(rid: str, feedback_id: str, request: Request):
-    return {"job_id": orch(request).apply_feedback(rid, feedback_id)}
+@router.post("/deck/ask/undo", summary="Undo the last section-level or deck-level Ask AI change")
+def undo_ask(rid: str, request: Request):
+    return orch(request).undo_ask_ai(rid)
 
 
 # --- audit

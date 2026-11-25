@@ -1,12 +1,11 @@
 """Stage 3: slides from approved claims, the PowerPoint file, versions and the 'changes since previous version' list."""
 from __future__ import annotations
 
-import copy
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core.slides import normalise, numbers_not_in, scrub
 from . import assets as assets_svc
-from ..models import Asset, Calculation, Claim, Deck, Flag, SectionDraft, Slide
+from ..models import Asset, Claim, Deck, Flag, SectionDraft, Slide
 from .ctx import Context, claim_payload, current_claims, draft_of, get_report, log_event, outline, set_state
 from .jobs import Progress
 from .numbers import allowed_numbers, section_numbers
@@ -136,84 +135,20 @@ def write_section(ctx: Context, rid: str, payload: dict, allowed: list[float], l
     return final
 
 
-def diff_versions(s, rid: str, ver: int, lang: str) -> list[str]:
-    titles = {o.key: o.title for o in outline(s, rid)}
-    new = current_claims(s, rid, ver, None, ("approved",))
-    old = current_claims(s, rid, ver - 1, None, ("approved",))
-    carried = {c.carried_from for c in new if c.carried_from}
-    lines: list[str] = []
-    for c in new:
-        if not c.carried_from:
-            lines.append(f"{titles.get(c.section_key, c.section_key)}: {_t(lang, 'neu', 'new')} – {c.text[:110]}")
-    for c in old:
-        if c.id not in carried:
-            lines.append(f"{titles.get(c.section_key, c.section_key)}: {_t(lang, 'entfernt', 'removed')} – {c.text[:110]}")
-    return lines
-
-
-def _remap_spec(spec: dict, cmap: dict[str, str], calc_map: dict[str, str]) -> dict | None:
-    """A slide of the earlier version for the new one: its claim and calculation ids point to the carried copies. Content whose claims are gone is dropped."""
-    spec = copy.deepcopy(spec)
-    blocks = []
-    for b in spec["blocks"]:
-        if b["type"] in ("bullets", "kpis"):
-            items = []
-            for it in b["items"]:
-                had = bool(it.get("claim_ids") or it.get("calc_ids"))
-                it["claim_ids"] = [cmap[i] for i in it.get("claim_ids", []) if i in cmap]
-                it["calc_ids"] = [calc_map[i] for i in it.get("calc_ids", []) if i in calc_map]
-                if it["claim_ids"] or it["calc_ids"] or not had:
-                    items.append(it)
-            if items:
-                blocks.append({**b, "items": items})
-        else:
-            had = bool(b.get("claim_ids") or b.get("calc_ids"))
-            b["claim_ids"] = [cmap[i] for i in b.get("claim_ids", []) if i in cmap]
-            b["calc_ids"] = [calc_map[i] for i in b.get("calc_ids", []) if i in calc_map]
-            if b["claim_ids"] or b["calc_ids"] or not had:
-                blocks.append(b)
-    if not blocks and spec.get("kind") not in ("title",):
-        return None
-    spec["blocks"] = blocks
-    return spec
-
-
-def new_version(ctx: Context, rid: str) -> int:
-    """v2 starts as a copy of v1: approved claims (with their calculations), drafts and slides are carried forward."""
+def auto_approve(ctx: Context, rid: str, only: list[str] | None = None) -> int:
+    """There is no approval step: what the verifier supports goes into the deck. A claim it flagged stays out and is listed as something to look at;
+    the author can take it in with one click. Returns the number of claims that are in."""
     with ctx.db.session() as s:
         r = get_report(s, rid)
-        old, new = r.version_no, r.version_no + 1
-        r.version_no, r.version = new, f"v{new}"
-        cmap: dict[str, str] = {}
-        calc_map: dict[str, str] = {}
-        for c in current_claims(s, rid, old, None, ("approved",)):
-            for cid in c.calc_ids:
-                if cid not in calc_map:
-                    k = s.get(Calculation, cid)
-                    nk = Calculation(report_id=rid, section_key=k.section_key, ref=k.ref, label=k.label, formula=k.formula, inputs=k.inputs, value=k.value, unit=k.unit, error=k.error, version_no=new)
-                    s.add(nk)
-                    s.flush()
-                    calc_map[cid] = nk.id
-            nc = Claim(report_id=rid, section_key=c.section_key, ref=c.ref, position=c.position, text=c.text, kind=c.kind, evidence_ids=list(c.evidence_ids),
-                       calc_ids=[calc_map[i] for i in c.calc_ids if i in calc_map], confidence=c.confidence, status="approved", verdict=c.verdict, issues=[],
-                       user_edited=c.user_edited, version_no=new, carried_from=c.id)
-            s.add(nc)
-            s.flush()
-            cmap[c.id] = nc.id
-        for d in s.query(SectionDraft).filter_by(report_id=rid, version_no=old).all():
-            charts = copy.deepcopy(d.charts)
-            for ch in charts:
-                ch["calc_ids"] = [calc_map.get(i, i) for i in ch.get("calc_ids", [])]
-                ch["claim_ids"] = [cmap[i] for i in ch.get("claim_ids", []) if i in cmap]
-            s.add(SectionDraft(report_id=rid, section_key=d.section_key, version_no=new, headline=d.headline, charts=charts, open_points=d.open_points, rounds=d.rounds, verified=True))
-        for sl in s.query(Slide).filter_by(report_id=rid, version_no=old).all():
-            if sl.section_key in ("_sources", "_changes"):
-                continue  # recomputed
-            spec = _remap_spec(sl.spec, cmap, calc_map) if sl.spec else None
-            if spec is None:
+        n = 0
+        for c in current_claims(s, rid, r.version_no, None, ("verified", "approved")):
+            if only and c.section_key not in only:
                 continue
-            bullets, chart, assets = legacy(spec)
-            s.add(Slide(report_id=rid, version_no=new, section_key=sl.section_key, position=sl.position, title=sl.title, bullets=bullets, chart=chart or sl.chart,
-                        asset_ids=assets, notes=sl.notes, layout=sl.layout, spec=spec, kind=sl.kind, history=[], user_edited=sl.user_edited))
-        log_event(s, rid, "new_version", **{"from": old, "to": new})
-        return new
+            if c.status != "approved":
+                c.status = "approved"
+            n += 1
+        total = s.query(Claim).filter_by(report_id=rid, version_no=r.version_no, status="approved").count()
+        if not total:
+            raise ValueError("no finding could be verified against the sources, so there is nothing to build slides from; add material or a link and run the research again")
+        log_event(s, rid, "claims_taken_in", claims=n, sections=only or "all")
+        return n

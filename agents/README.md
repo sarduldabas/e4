@@ -35,7 +35,7 @@ pytest        # after: pip install -r requirements-dev.txt
 | `storyline-architect` | strong | the story of the deck: key message per section, order, which slides carry which numbers |
 | `slide-writer` | strong | one slide spec per slide: layout, KPIs, chart, table, callout, bullets tied to claims, notes |
 | `slide-editor` | strong | carries out a reviewer's comment on one slide; says what it changed and what it could not do |
-| `feedback-interpreter` | standard | free-text feedback -> structured changes with the re-run point |
+| `feedback-interpreter` | standard | free-text change request (Ask AI, section or whole deck) -> structured changes with the re-run point |
 
 Every agent has a **model path** and a **rules path**. With a model configured (`AGENT_MODE=auto|llm`) the model answers; its
 answer is validated against the output schema (one repair attempt), and anything it cannot back up is dropped

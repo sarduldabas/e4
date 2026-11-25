@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import copy
 
-from ..core.slides import build_pptx, claim_ids_of, normalise, numbers_not_in, parse_numbers, scrub, theme_of
+from ..core.slides import build_pptx, claim_ids_of, merge, normalise, numbers_not_in, pack_plan, parse_numbers, scrub, theme_of
 from ..core.slides.spec import block_numbers
 from . import assets as assets_svc
-from ..models import Asset, Calculation, Claim, Deck, Evidence, FileRow, Flag, Report, SectionDraft, Slide, Source
+from ..models import Asset, Calculation, Claim, Deck, DeckSnapshot, Evidence, FileRow, Flag, Report, SectionDraft, Slide, Source
 from .ctx import Context, NotFound, StateError, current_claims, draft_of, get_report, log_event, outline, require_state
 from .numbers import allowed_numbers, section_numbers
 
@@ -101,9 +101,7 @@ def put(s, rid: str, ver: int, section_key: str, position: int, spec: dict, *, u
 
 
 def refresh_system_slides(ctx: Context, rid: str) -> None:
-    """Title, sources and changes slides follow the content: recomputed whenever slides are generated or edited."""
-    from .generate import diff_versions
-
+    """Title and sources slides follow the content: recomputed whenever slides are generated or edited."""
     with ctx.db.session() as s:
         r = get_report(s, rid)
         ver, lang = r.version_no, r.lang
@@ -130,10 +128,24 @@ def refresh_system_slides(ctx: Context, rid: str) -> None:
         rows = [[k, ", ".join(sorted(v - {""})) or "–"] for k, v in sorted(used.items())][:10]
         upsert("_sources", normalise({"kind": "sources", "layout": "table", "title": _t(lang, "Quellenverzeichnis", "Sources"), "blocks": [
             {"slot": "table", "type": "table", "header": [_t(lang, "Quelle", "Source"), _t(lang, "Fundstellen", "Locations")], "rows": rows}]}, lang)[0] if used else None)
-        if ver > 1:
-            lines = diff_versions(s, rid, ver, lang) or [_t(lang, "Keine inhaltlichen Änderungen.", "No changes in content.")]
-            upsert("_changes", normalise({"kind": "changes", "layout": "bullets", "title": _t(lang, f"Änderungen gegenüber v{ver - 1}", f"Changes since v{ver - 1}"), "blocks": [
-                {"slot": "bullets", "type": "bullets", "items": [{"text": x} for x in lines[:7]]}]}, lang)[0])
+
+
+def packed(s, rid: str, ver: int, lang: str, rows: list[Slide], specs: list[dict]) -> tuple[list[dict], list[list[int]]]:
+    """The slides as the file has them: short text slides of neighbouring sections share a page (core/slides/pack.py). Also returns the groups of slide indexes."""
+    sections = [x.section_key for x in rows]
+    groups = pack_plan(specs, sections)
+    if all(len(g) == 1 for g in groups):
+        return specs, groups
+    led = Ledger(s, rid, ver)
+    titles = {o.key: o.title for o in outline(s, rid)}
+    out = []
+    for g in groups:
+        if len(g) == 1:
+            out.append(specs[g[0]])
+        else:
+            merged, _ = finish(led, merge([specs[i] for i in g], [titles.get(sections[i], sections[i]) for i in g]), lang)
+            out.append(merged)
+    return out, groups
 
 
 def deck_specs(ctx: Context, rid: str) -> tuple[list[dict], dict[str, bytes], bytes | None, str]:
@@ -143,6 +155,7 @@ def deck_specs(ctx: Context, rid: str) -> tuple[list[dict], dict[str, bytes], by
         lang = r.lang
         rows = ordered(s, rid, r.version_no)
         specs = [normalise(x.spec, lang)[0] if x.spec else normalise({"layout": "bullets", "title": x.title, "blocks": [{"slot": "bullets", "type": "bullets", "items": x.bullets}]}, lang)[0] for x in rows]
+        specs, _ = packed(s, rid, r.version_no, lang, rows, specs)
         assets = {a.id: a for a in s.query(Asset).filter_by(report_id=rid).all()}
         images = {}
         for sp in specs:
@@ -175,6 +188,36 @@ def build_deck_file(ctx: Context, rid: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------- reading
+def _claim_view(c: Claim, led: Ledger, lang: str) -> dict:
+    return {"id": c.id, "text": c.text, "status": c.status, "verdict": c.verdict, "issues": c.issues,
+            "evidence": [{"id": e.id, "statement": e.statement, "quote": e.quote, "locator": e.locator, "source": led.label(e, lang), "origin": e.origin}
+                         for e in (led.ev.get(i) for i in c.evidence_ids) if e][:6],
+            "calculations": [{"id": k.id, "label": k.label, "formula": k.formula, "value": k.value, "unit": k.unit} for k in (led.calcs.get(i) for i in c.calc_ids) if k]}
+
+
+def attention(s, rid: str, ver: int, slides: list[dict], titles: dict[str, str]) -> list[dict]:
+    """What the author may want to look at: claims the verifier left out of the slides, and open flags. Nothing here blocks the download."""
+    first: dict[str, str] = {}
+    by_claim: dict[str, str] = {}
+    for x in slides:
+        first.setdefault(x["section_key"], x["id"])
+        for c in x["claims"]:
+            by_claim.setdefault(c["id"], x["id"])
+    items: list[dict] = []
+    left_out = s.query(Claim).filter_by(report_id=rid, version_no=ver, status="flagged").order_by(Claim.section_key, Claim.position).all()
+    ids = {c.id for c in left_out}
+    for c in left_out:
+        items.append({"kind": "claim", "id": c.id, "severity": "warning", "text": c.text, "issues": c.issues, "section_key": c.section_key,
+                      "section": titles.get(c.section_key, c.section_key), "slide_id": first.get(c.section_key)})
+    for f in s.query(Flag).filter_by(report_id=rid, version_no=ver, status="open").order_by(Flag.created_at).all():
+        if f.severity not in ("blocker", "warning") or (f.claim_id and f.claim_id in ids):
+            continue
+        items.append({"kind": "flag", "id": f.id, "severity": f.severity, "text": f.text, "issues": [], "origin": f.origin, "section_key": f.section_key,
+                      "section": titles.get(f.section_key or "", ""), "slide_id": by_claim.get(f.claim_id or "") or first.get(f.section_key or "")})
+    items.sort(key=lambda i: (i["severity"] != "blocker", i["kind"] != "claim"))
+    return items
+
+
 def deck_view(ctx: Context, rid: str) -> dict:
     with ctx.db.session() as s:
         r = get_report(s, rid)
@@ -183,17 +226,25 @@ def deck_view(ctx: Context, rid: str) -> dict:
         led = Ledger(s, rid, ver)
         d = s.query(Deck).filter_by(report_id=rid, version_no=ver).first()
         tpl = s.query(FileRow).filter_by(report_id=rid, role="template").first()
+        rows = ordered(s, rid, ver)
+        specs = [normalise(x.spec or {"layout": "bullets", "title": x.title, "blocks": [{"slot": "bullets", "type": "bullets", "items": x.bullets}]}, lang)[0] for x in rows]
+        _, groups = packed(s, rid, ver, lang, rows, specs)
+        joins = {g[k] for g in groups for k in range(len(g) - 1)}  # a slide that shares its page with the next one in the file
+        flags = s.query(Flag).filter_by(report_id=rid, version_no=ver, status="open").all()
+        sys_titles = {"_title": _t(lang, "Titel", "Title"), "_summary": _t(lang, "Management Summary", "Executive summary"), "_decision": _t(lang, "Beschluss", "Decision"),
+                      "_sources": _t(lang, "Quellen", "Sources")}
         slides = []
-        for n, x in enumerate(ordered(s, rid, ver), 1):
-            spec = x.spec or normalise({"layout": "bullets", "title": x.title, "blocks": [{"slot": "bullets", "type": "bullets", "items": x.bullets}]}, lang)[0]
+        for n, (x, spec) in enumerate(zip(rows, specs), 1):
             ids = claim_ids_of(spec)
-            slides.append({"id": x.id, "n": n, "section_key": x.section_key, "section": titles.get(x.section_key) or {"_title": _t(lang, "Titel", "Title"), "_summary": _t(lang, "Management Summary", "Executive summary"),
-                                                                                                                  "_decision": _t(lang, "Beschluss", "Decision"), "_sources": _t(lang, "Quellen", "Sources"),
-                                                                                                                  "_changes": _t(lang, "Änderungen", "Changes")}.get(x.section_key, x.section_key),
+            slides.append({"id": x.id, "n": n, "section_key": x.section_key, "section": titles.get(x.section_key) or sys_titles.get(x.section_key, x.section_key),
                            "kind": x.kind, "locked": x.kind in LOCKED_KINDS, "title": x.title, "spec": spec, "bullets": x.bullets, "chart": x.chart, "notes": x.notes, "asset_ids": x.asset_ids,
-                           "user_edited": x.user_edited, "can_undo": bool(x.history), "claims": [{"id": cid, "text": led.claims[cid].text} for cid in ids if cid in led.claims]})
-        return {"version": r.version, "state": r.state, "has_file": bool(d), "changes": d.changes if d else [], "slides": slides, "theme": theme_of(ctx.store.get(tpl.key) if tpl else None),
-                "template": tpl.name if tpl else None}
+                           "user_edited": x.user_edited, "can_undo": bool(x.history), "shares_with_next": (n - 1) in joins,
+                           "claims": [_claim_view(led.claims[cid], led, lang) for cid in ids if cid in led.claims],
+                           "attention": sum(1 for f in flags if f.claim_id in ids and f.severity in ("blocker", "warning"))})
+        undo = s.query(DeckSnapshot).filter_by(report_id=rid).order_by(DeckSnapshot.created_at.desc()).first()
+        return {"version": r.version, "state": r.state, "has_file": bool(d), "slides": slides, "theme": theme_of(ctx.store.get(tpl.key) if tpl else None),
+                "template": tpl.name if tpl else None, "attention": attention(s, rid, ver, slides, titles), "export": {"slides": len(groups), "shared": sum(1 for g in groups if len(g) > 1)},
+                "ai_undo": {"label": undo.label} if undo else None}
 
 
 # ---------------------------------------------------------------------------------------------- editing

@@ -29,11 +29,14 @@ port 5173                        API, database, orchestrator      13 agents, one
   "case workspace", which is the memory; agents stay stateless), parsers, the calculation engine and the PowerPoint builder.
   Details: `backend/README.md`.
 - **committee-report-assistant/**: the React front end. German is the default language, English is a toggle.
-  Stage 1 (Brief) is wired to the backend. Stages 2 and 3 still show mock data (see "Not done yet").
+  The Live mode is wired to the backend (Brief, Draft, Agent log). Demo mode shows the same two steps with sample data.
 - **e2e/**: `run_e2e.py` drives the whole workflow over HTTP and checks it.
 - Design rules that must keep holding: agents never call each other; every claim traces back claim -> evidence -> source ->
   locator; parsing, arithmetic, charts and PowerPoint are code, never the model; at most 2 analyst-and-verifier rounds; deck
-  generation is blocked while blocker flags are open; three human checkpoints (outline, findings, deck).
+  a claim the verifier does not support stays out of the slides and is listed as "needs attention" (it never blocks the download);
+  two steps for the user: brief, then one draft (research, analysis and slides in one place, autosaved, no sign-offs).
+  Ask AI changes one slide, one section or the whole deck; section/deck changes can be undone once. Section-to-page packing
+  (`core/slides/pack.py`) happens only when the PowerPoint file is built.
 
 More detail: `README.md` (root), `agents/README.md`, `backend/README.md`, `PROJECT_NOTES.md`.
 
@@ -112,7 +115,7 @@ backend\.venv\Scripts\python.exe -m pytest backend -q      # expected: 26 passed
 
 Run the pytest commands from the repository root as written (the backend tests start their own agents service).
 
-Run the whole workflow against the running services (upload, outline, interview, research, findings, deck, feedback, version 2):
+Run the whole workflow against the running services (upload, outline, interview, research and draft, edits, Ask AI with undo, export):
 
 ```powershell
 backend\.venv\Scripts\python.exe e2e\run_e2e.py --url http://localhost:8001
