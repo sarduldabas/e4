@@ -2,6 +2,7 @@ import { t } from '../i18n.js';
 import { Check, ChevronDown, History, Share2, Lock, LayoutGrid } from 'lucide-react';
 import { Avatars } from './ui.jsx';
 import { briefStrength, includedSections } from '../workspace.js';
+import ModeToggle from '../live/ModeToggle.jsx';
 
 export function Brand({ onClick }) {
   return (
@@ -43,7 +44,7 @@ export function LangToggle({ lang, setLang }) {
   );
 }
 
-export function TopBar({ ws, assessment, stage, canGo, onStage, onHome, onVersions, onShare, lang, setLang }) {
+export function TopBar({ ws, assessment, stage, canGo, onStage, onHome, onVersions, onShare, lang, setLang, mode, setMode }) {
   return (
     <header className="topbar">
       <div className="topbar-in">
@@ -68,6 +69,7 @@ export function TopBar({ ws, assessment, stage, canGo, onStage, onHome, onVersio
         </nav>
 
         <div className="tb-right">
+          <ModeToggle mode={mode} setMode={setMode} />
           <LangToggle lang={lang} setLang={setLang} />
           <span className="secure" title={t("Designed to run inside the Volkswagen cloud environment")}><Lock size={13} /> {t("Stays in VW environment")}</span>
           <button className="ghost-pill" onClick={onVersions}><History size={15} /> {ws.version} <span className="muted">{t("· Draft")}</span> <ChevronDown size={14} /></button>
@@ -79,12 +81,13 @@ export function TopBar({ ws, assessment, stage, canGo, onStage, onHome, onVersio
   );
 }
 
-export function HomeBar({ onHome, lang, setLang }) {
+export function HomeBar({ onHome, lang, setLang, mode, setMode }) {
   return (
     <header className="topbar plain">
       <div className="topbar-in">
         <div className="tb-left"><Brand onClick={onHome} /></div>
         <div className="tb-right">
+          <ModeToggle mode={mode} setMode={setMode} />
           <LangToggle lang={lang} setLang={setLang} />
           <span className="secure"><Lock size={13} /> {t("Stays in VW environment")}</span>
           <span className="who"><span className="who-name">{t("Katrin Weber")}</span><span className="who-dept">{t("Technical Development")}</span></span>

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from .agents.brief_agent import BriefAgent
 from .agents.brief_llm import LlmBriefAgent
-from .agents.core import AgentRunner
+from .agents.core import AgentFailed, AgentRunner
 from .agents.registry import build_registry
 from .config import Settings, load_settings
 from .llm import AzureOpenAIClient, LlmClient, LlmError
@@ -37,14 +37,11 @@ def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -
 
     app = FastAPI(title="COE4 Agents", version="0.3.0", description="Agents behind the Committee Report Assistant.")
     registry = build_registry()
-    # The 12 pipeline agents share one runner: model when configured (AGENT_MODE auto/llm), rules version otherwise.
-    runner = AgentRunner(llm if settings.agent_mode != "rules" else None, settings.agent_mode)
+    # All agents (the brief agent included) share one runner: model when configured (AGENT_MODE auto/llm), rules version otherwise.
+    runner = AgentRunner(llm if settings.agent_mode != "rules" else None, settings.agent_mode, settings.fallback)
     runner_mode = "llm" if runner.uses_model else "rules"
-    agents = [
-        {"id": "brief", "stage": 1, "name": "Brief agent", "status": "available", "endpoint": "/v1/brief/assess",
-         "description": brief_agent.description, "version": brief_agent.version, "mode": mode},
-        *({**a.info(), "mode": runner_mode} for a in registry.values()),
-    ]
+    registry["brief"].bind(brief_agent)
+    agents = [{**a.info(), "mode": mode if a.id == "brief" else runner_mode, **({"endpoint": "/v1/brief/assess"} if a.id == "brief" else {})} for a in registry.values()]
 
     @app.get("/health")
     def health() -> dict:
@@ -88,7 +85,10 @@ def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -
             inp = a.input_model.model_validate(payload)
         except ValidationError as e:
             raise HTTPException(422, detail=e.errors(include_url=False, include_context=False)) from e
-        res = runner.run(a, inp)
+        try:
+            res = runner.run(a, inp)
+        except AgentFailed as e:
+            raise HTTPException(502, detail=str(e)) from e
         return {"agent": a.id, "version": a.version, "mode": res.mode, "model": res.model, "note": res.note,
                 "usage": res.usage, "duration_ms": res.duration_ms, "output": res.output.model_dump(mode="json")}
 

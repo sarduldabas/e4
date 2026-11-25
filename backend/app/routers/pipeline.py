@@ -19,6 +19,7 @@ class CaseIn(BaseModel):
     decision_requested: str | None = None
     lang: str | None = Field(default=None, pattern="^(de|en)$")
     links: list[str] | None = None
+    use_web: bool | None = None
     committee_id: str | None = None
 
 
@@ -50,6 +51,20 @@ class FlagResolve(BaseModel):
 class SlidePatch(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     bullets: list[str] | None = None
+    spec: dict | None = None  # the whole slide as the page shows it (see /api/v1/slide-layouts)
+
+
+class ReviseIn(BaseModel):
+    instruction: str = Field(min_length=3, max_length=2000)
+
+
+class SlideAddIn(BaseModel):
+    after: str | None = None
+    layout: str = "bullets"
+
+
+class SlideMoveIn(BaseModel):
+    index: int = Field(ge=0)
 
 
 class OrderIn(BaseModel):
@@ -168,7 +183,38 @@ def deck(rid: str, request: Request):
 
 @router.patch("/deck/slides/{slide_id}")
 def patch_slide(rid: str, slide_id: str, body: SlidePatch, request: Request):
-    return orch(request).update_slide(rid, slide_id, body.title, body.bullets)
+    return orch(request).update_slide(rid, slide_id, body.title, body.bullets, body.spec)
+
+
+@router.post("/deck/slides", status_code=201, summary="Add a slide after another one")
+def add_slide(rid: str, body: SlideAddIn, request: Request):
+    return orch(request).add_slide(rid, body.after, body.layout)
+
+
+@router.post("/deck/slides/{slide_id}/revise", summary="Slide-editor: carry out a reviewer's comment on this slide")
+def revise_slide(rid: str, slide_id: str, body: ReviseIn, request: Request):
+    return orch(request).revise_slide(rid, slide_id, body.instruction)
+
+
+@router.post("/deck/slides/{slide_id}/undo", summary="Back to the slide before its last change")
+def undo_slide(rid: str, slide_id: str, request: Request):
+    return orch(request).undo_slide(rid, slide_id)
+
+
+@router.put("/deck/slides/{slide_id}/position", status_code=204, summary="Move a slide to position `index` (0-based)")
+def move_slide(rid: str, slide_id: str, body: SlideMoveIn, request: Request):
+    orch(request).move_slide(rid, slide_id, body.index)
+
+
+@router.delete("/deck/slides/{slide_id}", status_code=204)
+def delete_slide(rid: str, slide_id: str, request: Request):
+    orch(request).delete_slide(rid, slide_id)
+
+
+@router.get("/assets/{asset_id}", summary="An image of the report (used by slides)")
+def asset(rid: str, asset_id: str, request: Request):
+    data, mime = orch(request).asset_bytes(rid, asset_id)
+    return Response(data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.put("/deck/order")
@@ -203,6 +249,11 @@ def apply_feedback(rid: str, feedback_id: str, request: Request):
 @router.get("/events", summary="Decisions and state changes")
 def events(rid: str, request: Request):
     return orch(request).events(rid)
+
+
+@router.get("/agent-runs/summary", summary="Calls, tokens and time per agent, model vs. rules")
+def agent_runs_summary(rid: str, request: Request):
+    return orch(request).agent_summary(rid)
 
 
 @router.get("/agent-runs", summary="Every agent call of this report (add io=true for inputs and outputs)")

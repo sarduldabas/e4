@@ -1,0 +1,46 @@
+{
+  "canvas": {"w": 1280, "h": 720},
+  "title_box": {"x": 56, "y": 34, "w": 1168, "h": 88},
+  "footer_box": {"x": 56, "y": 676, "w": 1060, "h": 28},
+  "page_box": {"x": 1136, "y": 676, "w": 88, "h": 28},
+  "layouts": {
+    "exec-summary": {"label": {"de": "Management Summary", "en": "Executive summary"}, "slots": {
+      "kpis": {"x": 56, "y": 142, "w": 1168, "h": 132},
+      "bullets": {"x": 56, "y": 298, "w": 724, "h": 360},
+      "callout": {"x": 812, "y": 298, "w": 412, "h": 360}}},
+    "kpi-chart": {"label": {"de": "Kennzahlen und Diagramm", "en": "KPIs and chart"}, "slots": {
+      "kpis": {"x": 56, "y": 142, "w": 1168, "h": 120},
+      "chart": {"x": 56, "y": 282, "w": 664, "h": 376},
+      "bullets": {"x": 752, "y": 282, "w": 472, "h": 376}}},
+    "chart-text": {"label": {"de": "Diagramm links, Text rechts", "en": "Chart left, text right"}, "slots": {
+      "chart": {"x": 56, "y": 142, "w": 700, "h": 516},
+      "bullets": {"x": 788, "y": 142, "w": 436, "h": 516}}},
+    "text-chart": {"label": {"de": "Text links, Diagramm rechts", "en": "Text left, chart right"}, "slots": {
+      "bullets": {"x": 56, "y": 142, "w": 436, "h": 516},
+      "chart": {"x": 524, "y": 142, "w": 700, "h": 516}}},
+    "kpi-bullets": {"label": {"de": "Kennzahlen mit Text", "en": "KPIs with text"}, "slots": {
+      "kpis": {"x": 56, "y": 142, "w": 1168, "h": 150},
+      "bullets": {"x": 56, "y": 316, "w": 1168, "h": 342}}},
+    "bullets": {"label": {"de": "Text", "en": "Text"}, "slots": {
+      "bullets": {"x": 56, "y": 142, "w": 1168, "h": 516}}},
+    "two-column": {"label": {"de": "Zwei Spalten", "en": "Two columns"}, "slots": {
+      "bullets": {"x": 56, "y": 142, "w": 572, "h": 516},
+      "bullets2": {"x": 652, "y": 142, "w": 572, "h": 516}}},
+    "table": {"label": {"de": "Tabelle", "en": "Table"}, "slots": {
+      "table": {"x": 56, "y": 142, "w": 1168, "h": 516}}},
+    "table-text": {"label": {"de": "Tabelle mit Text", "en": "Table with text"}, "slots": {
+      "table": {"x": 56, "y": 142, "w": 1168, "h": 300},
+      "bullets": {"x": 56, "y": 462, "w": 1168, "h": 196}}},
+    "table-callout": {"label": {"de": "Vergleich mit Fazit", "en": "Comparison with conclusion"}, "slots": {
+      "table": {"x": 56, "y": 142, "w": 780, "h": 516},
+      "callout": {"x": 868, "y": 142, "w": 356, "h": 516}}},
+    "image-text": {"label": {"de": "Bild und Text", "en": "Image and text"}, "slots": {
+      "image": {"x": 56, "y": 142, "w": 664, "h": 516},
+      "bullets": {"x": 752, "y": 142, "w": 472, "h": 516}}},
+    "decision": {"label": {"de": "Beschlussvorschlag", "en": "Decision"}, "slots": {
+      "callout": {"x": 56, "y": 142, "w": 1168, "h": 168},
+      "bullets": {"x": 56, "y": 334, "w": 572, "h": 324},
+      "bullets2": {"x": 652, "y": 334, "w": 572, "h": 324}}}
+  },
+  "limits": {"bullets": 7, "bullets2": 7, "kpis": 4, "table_rows": 10, "table_cols": 6, "callout_chars": 420, "title_chars": 150, "bullet_chars": 230}
+}

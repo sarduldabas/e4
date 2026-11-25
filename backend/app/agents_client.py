@@ -39,6 +39,13 @@ class AgentsClient:
     async def list_agents(self) -> list:
         return await self._request("GET", "/v1/agents")  # type: ignore[return-value]
 
+    async def info(self) -> dict | None:
+        """The agents service's own view of itself (mode, model, auth): None when it is not reachable."""
+        try:
+            return await self._request("GET", "/health")  # type: ignore[return-value]
+        except (AgentsUnavailable, AgentsError):
+            return None
+
     async def health(self) -> bool:
         try:
             await self._request("GET", "/health")

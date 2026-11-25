@@ -10,25 +10,30 @@ pytest        # after: pip install -r requirements-dev.txt
 
 ## Endpoints
 - `GET /health`, `GET /health/llm` (calls the model once: checks endpoint, deployment and credentials)
-- `GET /v1/agents`: the 13 agents (Brief agent + the 12 pipeline agents) and the mode each runs in
+- `GET /v1/agents`: the 17 agents and the mode each runs in
 - `POST /v1/agents/{id}/run`: JSON in, JSON out, the same envelope for every pipeline agent: `{agent, version, mode, model, note, usage, duration_ms, output}`
 - `GET /v1/agents/{id}/schema`: input and output JSON Schema of an agent
 - `POST /v1/brief/assess`: the Brief agent (front end, via the backend)
 
-## The 12 pipeline agents (`app/agents/`)
+## The agents (`app/agents/`)
 | Agent | Tier | Job |
 |---|---|---|
-| `template-analyst` | strong | template structure -> outline with the inputs each section needs |
+| `brief` | standard | scores the brief, understands topic, committee, date; hints and questions (Stage 1) |
+| `template-analyst` | strong | template structure -> outline with the inputs each section needs; without a template it advises a structure |
+| `document-reader` | vision | reads pages that code cannot read (scans, images, figures): text, tables, figure facts; marks what is unreadable |
 | `interviewer` | strong | captures what the user says, judges coverage, asks the next question, stops when covered / user done / 12 questions |
 | `source-planner` | standard | which sources to search, with which terms, per section |
 | `source-screener` | small | relevance, duplicates and old versions among the hits |
+| `web-search` | standard | Foundry web search tool: finds pages and facts for a query (no Bing key, no extra credentials); every page becomes a source |
 | `web-researcher` | standard | findings from fetched public pages (each with a quote that must occur in the page) |
 | `evidence-extractor` | standard | facts, figures, risks from one document; each with a verbatim quote and locator, checked mechanically |
 | `asset-curator` | vision | which images and tables belong on which slide |
-| `section-analyst` | strong | `plan`: which calculations; `write`: claims tied to evidence and calculation ids |
+| `section-analyst` | strong | `plan`: which calculations; `write`: claims tied to evidence and calculation ids; reads raw source passages and may add verified evidence |
 | `verifier` | strong | checks every claim against its evidence; a wrong number is a blocker whatever the model says |
 | `red-team` | strong | sceptical reading of the whole draft: hard questions, gaps, inconsistencies |
-| `slide-writer` | standard | slide titles, bullets (each tied to a claim), notes |
+| `storyline-architect` | strong | the story of the deck: key message per section, order, which slides carry which numbers |
+| `slide-writer` | strong | one slide spec per slide: layout, KPIs, chart, table, callout, bullets tied to claims, notes |
+| `slide-editor` | strong | carries out a reviewer's comment on one slide; says what it changed and what it could not do |
 | `feedback-interpreter` | standard | free-text feedback -> structured changes with the re-run point |
 
 Every agent has a **model path** and a **rules path**. With a model configured (`AGENT_MODE=auto|llm`) the model answers; its

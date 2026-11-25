@@ -32,13 +32,13 @@ A step in the wrong state answers `409`.
 | brief, files | `PUT /case`, `POST /files` (role template / source / prior_report) | – |
 | outline | `POST /outline/propose`, `PUT /outline` | template-analyst |
 | interview | `POST /interview/turn` | interviewer |
-| **checkpoint 1** | `POST /outline/approve` → job | source-planner, source-screener, evidence-extractor, web-researcher*, asset-curator, then per section section-analyst (plan, write) + verifier (max 2 rounds), then red-team |
-| **checkpoint 2** | `GET /findings`, `PATCH /claims/{id}`, `POST /flags/{id}/resolve`, `POST /findings/approve` → job | verifier again on edited claims; slide-writer |
-| **checkpoint 3** | `GET /deck`, `PATCH /deck/slides/{id}`, `GET /deck/download`, `POST /deck/finalize` | – (PowerPoint is built by code) |
+| **checkpoint 1** | `POST /outline/approve` → job | source-planner, web-search*, source-screener, document-reader (scans, images), evidence-extractor (all text, in blocks), asset-curator, then per section section-analyst (plan, write) + verifier (max 2 rounds), then red-team |
+| **checkpoint 2** | `GET /findings`, `PATCH /claims/{id}`, `POST /flags/{id}/resolve`, `POST /findings/approve` → job | verifier again on edited claims; storyline-architect, slide-writer |
+| **checkpoint 3** | `GET /deck`, `PATCH /deck/slides/{id}` (the whole slide spec), `POST /deck/slides/{id}/revise` (a comment), `POST .../undo`, `POST /deck/slides`, `PUT .../position`, `DELETE`, `GET /deck/download`, `POST /deck/finalize`; layouts: `GET /api/v1/slide-layouts` | slide-editor (PowerPoint is built by code from the same slide JSON) |
 | next version | `POST /feedback`, `POST /feedback/{id}/apply` → job | feedback-interpreter, then only what the feedback touches |
-| audit | `GET /events`, `GET /agent-runs?io=true`, `GET /sources`, `GET /jobs/{id}` | – |
+| audit | `GET /events`, `GET /agent-runs?io=true`, `GET /agent-runs/summary`, `GET /sources`, `GET /jobs/{id}`; status for the page: `GET /api/v1/system/status` | – |
 
-\* only when `ALLOW_WEB=true` and the brief names links.
+\* only when `ALLOW_WEB=true` and the report has web research switched on (`use_web`); links named in the brief are always fetched when web is allowed.
 
 Rules the orchestrator enforces: generation is blocked while a **blocker** flag is open (a blocker can be accepted only
 with a written reason, which is kept); edited claims are verified again; every slide bullet must point to an approved claim;
@@ -46,9 +46,9 @@ chart numbers must be numbers from the ledger; calculations are computed by `app
 v2 starts as a copy of v1's approved claims and slides, and only the sections the feedback touches are redone.
 
 ## Settings
-See `.env.example`.
+See `.env.example`: services, storage, `ALLOW_WEB`, and the reading limits `PARALLEL_CALLS`, `MAX_VISION_PAGES`, `EXTRACT_BATCH_CHARS`, `MAX_EXTRACT_CHARS`, `PASSAGE_CHARS`.
 
 ## Structure
 `app/main.py` (app factory), `app/db.py`, `app/models.py`, `app/routers/` (brief, reports, workflow, system),
-`app/services/` (orchestrator, outline, collect, analyse, generate, feedback, jobs, runner, ctx),
-`app/core/` (parsers, calc, deck, connectors, storage), `app/agents_client.py` (brief assessment), `app/seed.py`.
+`app/services/` (orchestrator, outline, ingest, collect, retrieval, analyse, numbers, generate, slides, feedback, jobs, runner, ctx),
+`app/core/` (parsers, calc, slides: layouts, fit, spec, theme, render_pptx; connectors, storage), `app/agents_client.py` (brief assessment), `app/seed.py`.

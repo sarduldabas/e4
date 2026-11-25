@@ -14,9 +14,9 @@ Three services. The front end only talks to the backend; the backend is the only
 
 | Folder | Service | Port | Job |
 |---|---|---|---|
-| `committee-report-assistant/` | Front end (React 18 + Vite) | 5173 (dev) / 8080 (Docker) | The three stages: Brief, Analysis, Report |
+| `committee-report-assistant/` | Front end (React 18 + Vite) | 5173 (dev) / 8080 (Docker) | The three stages: Brief, Analysis, Report. **Demo** mode (built-in sample data) and **Live** mode (the real backend and agents, plus the Agent log tab) |
 | `backend/` | FastAPI | 8001 | Controls the front end: API, committees and reports storage, calls the agents, hides agent failures from the UI |
-| `agents/` | FastAPI | 8002 | The agents: the **Brief agent** (Stage 1) and the **12 pipeline agents** (stateless, JSON in / JSON out). Each runs on your model (Foundry) or on a built-in rules version |
+| `agents/` | FastAPI | 8002 | The **17 agents** (Brief, reading, research, analysis, slides; stateless, JSON in / JSON out). Each runs on your model (Foundry) or on a built-in rules version |
 
 The **orchestrator** (plain Python state machine and job runner) lives in the backend. Agents never call each other; the orchestrator
 calls them in order, keeps all state in the **case workspace** (database + files, see `backend/README.md`) and enforces the three
@@ -39,7 +39,7 @@ cd agents  && pip install -r requirements.txt && uvicorn app.main:app --port 800
 cd backend && pip install -r requirements.txt && uvicorn app.main:app --port 8001 --reload
 cd committee-report-assistant && npm install && npm run dev
 ```
-Tests: `pip install -r requirements-dev.txt && pytest` inside `agents/` (48 tests) or `backend/` (26 tests); the backend tests start the agents service themselves.
+Tests: `pip install -r requirements-dev.txt && pytest` inside `agents/` (56 tests) or `backend/` (48 tests); the backend tests start the agents service themselves.
 
 ## What is connected today
 
@@ -50,9 +50,23 @@ Stage 1 (Brief):
 - Speech: the Speak button uses the browser's speech input (Chrome/Edge). See the privacy note below.
 - If the backend or an agent is down, the front end silently uses its local logic, so nothing breaks and the page also works as a single file.
 
-Stages 2 and 3 (Analysis, Report): the **whole pipeline now runs in the backend** and can be tried over the API (`/docs`) or with the
-demo script below. The front end screens for these stages still show mock data; wiring them to `/api/v1/reports/{id}/...` is the
-next step. Committees and reports are stored in the database; `PUT /api/v1/reports/{id}/workspace` still autosaves the front end's state.
+Stages 2 and 3 (Analysis, Report) run in the backend and, in **Live** mode, the front end uses them for everything:
+
+- **Demo | Live toggle** (top bar, remembered in the browser). Demo keeps the built-in sample data and sends nothing. Live works on the backend: create a
+  report, brief, upload files, outline, interview, research and analysis, review of claims and evidence, slides, export. Live shows an extra tab, **Agent log**:
+  which agent did what, on the model or on rules, tokens and time per agent, every call with its input and output, and the decisions of the run.
+- **Ingestion** (`backend/app/services/ingest.py`, `core/parsers`): any PDF (text, image, scanned), Word, PowerPoint, Excel, e-mail (.eml/.msg with attachments), image, text.
+  Code does the reading and the structure; pages that code cannot read (scans, images, figures) go to the `document-reader` agent (vision model). Every file gets a quality
+  report (read completely / in part / hardly readable, with warnings) that the page shows.
+- **Exhaustive analysis**: all text of all sources is processed in blocks (parallel), evidence is extracted with verbatim quotes and locators, and the section analyst also
+  reads the raw passages that matter for its section (retrieval) and may add evidence of its own that is checked against the passage text.
+- **Web research** (switch per report, `ALLOW_WEB=true`): Foundry's own web search tool, no Bing key, no extra credentials. Every page used is listed as a source.
+- **Slides**: one JSON per slide (`layout`, `blocks`, text sizes fitted on the server). The page and the PowerPoint file are drawn from the same JSON, so they match
+  (a test checks every title, bullet, key figure and table cell). Charts are native PowerPoint charts. Numbers on a slide must come from the evidence or a calculation.
+  Edit text right on the slide, or write a comment per slide for the slide editor (undo is kept); add, move, delete slides; download = what you see.
+- Template: upload a .pptx and its colours, fonts and structure are used. Without a template the template analyst advises a structure that fits topic and committee.
+
+Committees and reports are stored in the database; `PUT /api/v1/reports/{id}/workspace` still autosaves the Demo mode's state.
 
 ## Try the whole flow (no front end needed)
 ```
@@ -73,9 +87,8 @@ With your Foundry settings in `agents/.env` the same script runs on the model (`
 | connectors = folders `backend/data/connectors/<kind>/` | SharePoint, Exchange, Teams, SAP in `backend/app/core/connectors.py` |
 | threads in the backend | a queue / Durable Functions behind `services/jobs.py` |
 
-Not verified yet: any call to a real Foundry model for the 12 pipeline agents (only the Brief agent was ever pointed at a model endpoint, and
-only the SDK wiring was tested with a fake server). The model paths are tested with scripted model answers, including wrong ones.
-Sign-in to Foundry: an API key, or your Azure account (`AZURE_USE_ENTRA_ID=true`: Azure CLI `az login` or a browser tab, see `agents/README.md`).
+Not verified yet: any call to a real Foundry model for the pipeline agents (including the web search tool and the vision model); only the SDK wiring was tested with a fake server. The model paths are tested with scripted model answers, including wrong ones.
+Foundry settings are environment variables only (`agents/.env`): endpoint or resource + project name, deployment name, optional tenant id. No key is needed: with `AZURE_USE_ENTRA_ID=true` the first call opens a browser sign-in, after that the account is remembered (see `agents/README.md`).
 
 ## API overview
 

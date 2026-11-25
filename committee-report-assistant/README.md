@@ -52,3 +52,16 @@ Backend and speech
   after pauses until you click again. Unsupported browsers and a blocked microphone show a message.
   Note: Chrome sends the audio to Google's speech service. That conflicts with "stays in the Volkswagen environment".
   Replace it with Azure Speech inside the VW tenant before real users or real data (the change is local to `startVoice`).
+
+## Demo and Live mode
+
+The top bar has a **Demo | Live** switch (remembered in the browser).
+
+- **Demo**: the built-in sample data (`src/data.js`, `src/workspace.js`); nothing is sent anywhere. Only the brief score calls the backend when it runs.
+- **Live**: everything runs on the backend (`src/live/`): `LiveApp.jsx` (reports), `LiveBrief.jsx` (brief, files with reading quality, outline, interview),
+  `LiveAnalysis.jsx` (progress, claims, evidence, flags, sources), `LiveReport.jsx` + `SlideCanvas.jsx` (slides drawn from the same JSON as the PowerPoint file,
+  editable on the slide, per-slide comments to the slide editor, undo, add/move/delete, download), `LiveAudit.jsx` (the **Agent log** tab, Live only).
+  `client.js` has one function per backend endpoint. The slide geometry and theme come from `GET /api/v1/slide-layouts`, so the page and the file cannot drift apart.
+  The backend URL is `VITE_API_URL` (default `http://localhost:8001`).
+
+Live mode shows a banner when the backend or the agents service is down, or when the agents run without a language model (rules mode).

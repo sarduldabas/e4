@@ -53,6 +53,7 @@ class Report(Base):
     decision_requested: Mapped[str | None] = mapped_column(Text, nullable=True)
     people: Mapped[list] = mapped_column(JSON, default=list)
     links: Mapped[list] = mapped_column(JSON, default=list)  # public web links named in the brief
+    use_web: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)  # the author allows searching the public web for this report
     workspace: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # the front end's own autosaved state
     parent_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     edited_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
@@ -69,6 +70,7 @@ class FileRow(Base):
     key: Mapped[str] = mapped_column(String(400))  # storage key
     size: Mapped[int] = mapped_column(Integer, default=0)
     sha256: Mapped[str] = mapped_column(String(64), default="")
+    info: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # what the reader found: pages, warnings, quality (filled when read)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -90,6 +92,7 @@ class Source(Base):
     parsed_key: Mapped[str | None] = mapped_column(String(400), nullable=True)  # parsed text in the file store
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    info: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # reading result: quality, warnings, stats, document properties, profile
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -125,14 +128,16 @@ class Evidence(Base):
     id: Mapped[str] = _id("e")
     report_id: Mapped[str] = mapped_column(ForeignKey("reports.id", ondelete="CASCADE"), index=True)
     section_key: Mapped[str] = mapped_column(String(60), index=True)
-    origin: Mapped[str] = mapped_column(String(10), default="document")  # document | web | user
+    origin: Mapped[str] = mapped_column(String(10), default="document")  # document | web | user | analysis
     source_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     kind: Mapped[str] = mapped_column(String(10), default="fact")
     statement: Mapped[str] = mapped_column(Text)
     quote: Mapped[str] = mapped_column(Text, default="")
-    locator: Mapped[str] = mapped_column(String(120), default="")
+    locator: Mapped[str] = mapped_column(String(300), default="")
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     unit: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entity: Mapped[str | None] = mapped_column(String(120), nullable=True)  # what the figure belongs to: an option, a supplier, a plant
+    period: Mapped[str | None] = mapped_column(String(40), nullable=True)  # when it applies: 2026, Q3 2026, "per year"
     confidence: Mapped[float] = mapped_column(Float, default=0.7)
     status: Mapped[str] = mapped_column(String(10), default="active")  # active | rejected
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -236,6 +241,9 @@ class Slide(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     layout: Mapped[str | None] = mapped_column(String(120), nullable=True)
     user_edited: Mapped[bool] = mapped_column(Boolean, default=False)
+    spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # the slide as shown AND exported: layout, title, blocks (see core/slides)
+    history: Mapped[list | None] = mapped_column(JSON, nullable=True)  # earlier specs of this slide, newest last (undo)
+    kind: Mapped[str] = mapped_column(String(12), default="content")  # title | summary | content | decision | sources | changes
 
 
 class Deck(Base):
@@ -246,6 +254,7 @@ class Deck(Base):
     key: Mapped[str] = mapped_column(String(400))
     slide_count: Mapped[int] = mapped_column(Integer, default=0)
     changes: Mapped[list] = mapped_column(JSON, default=list)  # "changes since previous version"
+    storyline: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # the executive storyline the deck follows
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

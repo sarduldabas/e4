@@ -218,67 +218,159 @@ def test_pasted_endpoint_shapes_are_normalised(pasted, monkeypatch):
     assert _clean_endpoint("https://r.services.ai.azure.com/api/projects/p") == "https://r.services.ai.azure.com/api/projects/p"
 
 
-# ---- Entra ID sign-in (az login / browser tab) --------------------------------------------------
+# ---- Entra ID sign-in (az login / browser tab, remembered) ------------------------------------------
 
-class _FakeCredential:
-    instances: list = []
+class _Tok:
+    token, expires_on = "tok", 4_000_000_000
+
+
+class _Machine:
+    """Stands in for DefaultAzureCredential."""
+    available = True
+    kw: dict = {}
+
+    def __init__(self, **kw):
+        type(self).kw = kw
+
+    def get_token(self, *scopes, **_):
+        if not type(self).available:
+            raise RuntimeError("no identity on this machine")
+        return _Tok()
+
+
+class _Browser:
+    """Stands in for InteractiveBrowserCredential."""
+    log: list = []
+    silent_ok = True
 
     def __init__(self, **kw):
         self.kw = kw
-        self.token_calls: list = []
-        _FakeCredential.instances.append(self)
+        self.opened = False
 
     def get_token(self, *scopes, **_):
-        self.token_calls.append(scopes)
+        type(self).log.append("silent")
+        if self.kw.get("authentication_record") is None or not type(self).silent_ok:
+            raise RuntimeError("interaction required")
+        return _Tok()
+
+    def authenticate(self, scopes=None, **_):
+        type(self).log.append("browser")
         from types import SimpleNamespace
-        return SimpleNamespace(token="tok", expires_on=4_000_000_000)
+        return SimpleNamespace(serialize=lambda: '{"account":"x"}')
 
 
-def _entra_client(monkeypatch, **overrides):
+class _Chain:
+    def __init__(self, *creds):
+        self.creds = creds
+
+    def get_token(self, *scopes, **k):
+        return self.creds[0].get_token(*scopes, **k)
+
+
+def _patch_identity(monkeypatch, *, machine=False, silent_ok=True):
     import azure.identity as az
 
-    _FakeCredential.instances = []
-    monkeypatch.setattr(az, "DefaultAzureCredential", _FakeCredential)
-    s = LlmSettings(endpoint="https://x.openai.azure.com", deployment="gpt", use_entra_id=True, **overrides)
-    return AzureOpenAIClient(s)._build()
+    _Machine.available, _Browser.log, _Browser.silent_ok, _Machine.kw = machine, [], silent_ok, {}
+    monkeypatch.setattr(az, "DefaultAzureCredential", _Machine)
+    monkeypatch.setattr(az, "InteractiveBrowserCredential", _Browser)
+    monkeypatch.setattr(az, "ChainedTokenCredential", _Chain)
+    monkeypatch.setattr(az, "TokenCachePersistenceOptions", lambda **k: "cache")
+    monkeypatch.setattr(az, "AuthenticationRecord", type("R", (), {"deserialize": staticmethod(lambda text: {"account": "x"})}))
 
 
-def test_entra_signs_in_once_when_the_client_is_built_and_allows_the_browser(monkeypatch):
-    client = _entra_client(monkeypatch)
-    cred = _FakeCredential.instances[0]
-    assert cred.kw == {"exclude_interactive_browser_credential": False}  # browser tab is the last resort (default)
-    assert cred.token_calls == [("https://cognitiveservices.azure.com/.default",)]  # sign-in happened here, once
-    assert client._api_key_provider is not None  # the token provider, not a fixed key, is handed to the SDK
+def _settings(tmp_path, **kw):
+    return LlmSettings(endpoint="https://x.openai.azure.com", deployment="gpt", use_entra_id=True, auth_record=str(tmp_path / "rec.json"), **kw)
 
 
-def test_entra_browser_can_be_switched_off_and_tenant_passed_on(monkeypatch):
-    _entra_client(monkeypatch, entra_browser=False, tenant_id="tenant-1", entra_scope="https://ai.azure.com/.default")
-    cred = _FakeCredential.instances[0]
-    assert cred.kw == {"exclude_interactive_browser_credential": True, "interactive_browser_tenant_id": "tenant-1"}
-    assert cred.token_calls == [("https://ai.azure.com/.default",)]
+def test_machine_identity_is_used_first_and_no_browser_opens(monkeypatch, tmp_path):
+    from app.entra import build_credential
+
+    _patch_identity(monkeypatch, machine=True)
+    cred = build_credential(_settings(tmp_path))
+    assert isinstance(cred, _Machine) and _Browser.log == []
+    assert _Machine.kw == {"exclude_interactive_browser_credential": True}
 
 
-def test_entra_settings_come_from_the_environment(monkeypatch):
-    monkeypatch.setattr("app.config.load_env_file", lambda *a, **k: None)
-    monkeypatch.setenv("AZURE_USE_ENTRA_ID", "true")
-    monkeypatch.setenv("AZURE_ENTRA_BROWSER", "false")
-    monkeypatch.setenv("AZURE_TENANT_ID", " abc ")
-    s = load_settings().llm
-    assert s.use_entra_id and not s.entra_browser and s.tenant_id == "abc"
-    monkeypatch.delenv("AZURE_ENTRA_BROWSER")
-    assert load_settings().llm.entra_browser  # default: browser allowed
+def test_browser_signs_in_once_then_the_next_start_is_silent(monkeypatch, tmp_path):
+    from app.entra import build_credential
+
+    s = _settings(tmp_path, tenant_id="tenant-1")
+    _patch_identity(monkeypatch)
+    build_credential(s)  # first start: no record -> browser tab, record is saved
+    assert _Browser.log == ["browser"] and (tmp_path / "rec.json").read_text() == '{"account":"x"}'
+    assert _Machine.kw["interactive_browser_tenant_id"] == "tenant-1"
+    _Browser.log.clear()
+    build_credential(s)  # second start: the record exists -> silent, no tab
+    assert _Browser.log == ["silent"]
 
 
-def test_failed_sign_in_is_reported_not_raised_and_retried_next_time(monkeypatch):
-    import azure.identity as az
+def test_expired_remembered_sign_in_opens_the_browser_again(monkeypatch, tmp_path):
+    from app.entra import build_credential
 
-    class Broken(_FakeCredential):
-        def get_token(self, *a, **k):
-            raise RuntimeError("no browser available")
+    s = _settings(tmp_path)
+    (tmp_path / "rec.json").write_text('{"account":"x"}')
+    _patch_identity(monkeypatch, silent_ok=False)
+    build_credential(s)
+    assert _Browser.log == ["silent", "browser"]
 
-    monkeypatch.setattr(az, "DefaultAzureCredential", Broken)
-    c = AzureOpenAIClient(LlmSettings(endpoint="https://x.openai.azure.com", deployment="gpt", use_entra_id=True))
-    for _ in range(2):
+
+def test_browser_can_be_switched_off(monkeypatch, tmp_path):
+    from app.entra import build_credential
+
+    _patch_identity(monkeypatch)
+    with pytest.raises(RuntimeError, match="browser sign-in is switched off"):
+        build_credential(_settings(tmp_path, entra_browser=False))
+    assert _Browser.log == []
+
+
+def test_client_builds_with_the_remembered_credential_and_reports_failures(monkeypatch, tmp_path):
+    _patch_identity(monkeypatch, machine=True)
+    client = AzureOpenAIClient(_settings(tmp_path))._build()
+    assert client._api_key_provider is not None  # a token provider, not a fixed key
+    _patch_identity(monkeypatch, machine=False)
+    monkeypatch.setattr("app.entra._persistent_options", lambda: None)
+
+    def boom(self, scopes=None, **_):
+        raise RuntimeError("no browser available")
+
+    monkeypatch.setattr(_Browser, "authenticate", boom)
+    c = AzureOpenAIClient(_settings(tmp_path))
+    for _ in range(2):  # a failed sign-in is reported, nothing half-built is kept, and the next call tries again
         with pytest.raises(LlmError, match="no browser available"):
             c.complete_json("s", "u")
-    assert c._client is None  # nothing half-built is kept
+    assert c._client is None
+
+
+def test_settings_from_environment_and_project_endpoint(monkeypatch):
+    monkeypatch.setattr("app.config.load_env_file", lambda *a, **k: None)
+    for k in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_KEY", "AZURE_USE_ENTRA_ID", "AZURE_OPENAI_ENTRA_SCOPE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AZURE_AI_PROJECT_ENDPOINT", "https://r.services.ai.azure.com/api/projects/p/")
+    monkeypatch.setenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4.1")
+    monkeypatch.setenv("AZURE_TENANT_ID", " abc ")
+    s = load_settings().llm
+    assert s.endpoint == "https://r.services.ai.azure.com/api/projects/p" and s.deployment == "gpt-4.1" and s.tenant_id == "abc"
+    assert s.use_entra_id and s.configured  # no key given -> sign in with the Azure account
+    assert s.scope == "https://ai.azure.com/.default"  # project URL -> AI scope, automatically
+    monkeypatch.setenv("AZURE_OPENAI_ENTRA_SCOPE", "https://cognitiveservices.azure.com/.default")
+    assert load_settings().llm.scope == "https://cognitiveservices.azure.com/.default"  # an explicit scope wins
+
+
+def test_web_search_returns_text_and_cited_sources(monkeypatch):
+    from types import SimpleNamespace as N
+
+    seen = {}
+
+    class Responses:
+        def create(self, **kw):
+            seen.update(kw)
+            ann = [N(type="url_citation", url="https://a.example/x", title="A"), N(type="url_citation", url="https://a.example/x", title="dup"), N(type="url_citation", url="https://b.example", title="B")]
+            return N(output_text="Zellpreise sanken 2025.", usage=N(input_tokens=11, output_tokens=7),
+                     output=[N(type="web_search_call", action=N(query="zellpreise 2025")), N(type="message", content=[N(annotations=ann)])])
+
+    c = AzureOpenAIClient(LlmSettings(endpoint="https://x.openai.azure.com", deployment="gpt", api_key="k"))
+    c._client = N(responses=Responses())
+    r = c.web_search("Zellpreise 2025", instructions="be brief")
+    assert r["text"].startswith("Zellpreise") and [x["url"] for x in r["sources"]] == ["https://a.example/x", "https://b.example"] and r["queries"] == ["zellpreise 2025"]
+    assert seen["tools"] == [{"type": "web_search_preview"}] and seen["model"] == "gpt" and seen["instructions"] == "be brief"
+    assert c.last_usage == {"prompt_tokens": 11, "completion_tokens": 7}

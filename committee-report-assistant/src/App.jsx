@@ -10,6 +10,8 @@ import StageAnalysis from './components/StageAnalysis.jsx';
 import StageReport from './components/StageReport.jsx';
 import { VersionsDrawer, ShareModal, NotesPanel } from './components/Overlays.jsx';
 import { Toasts, useToasts } from './components/ui.jsx';
+import { useMode } from './live/mode.js';
+import LiveApp from './live/LiveApp.jsx';
 
 // What a change in the brief can make outdated in an existing analysis.
 const BRIEF_IMPACT = { text: ['s1', 's7'], files: ['s3', 's4'], answers: ['s7'], connectors: ['s3'] };
@@ -50,6 +52,7 @@ export default function App() {
   };
   applyLang(lang); // set before children render so every t() call sees the active language
   const [toasts, toast] = useToasts();
+  const [mode, setMode] = useMode();
 
   const setBrief = useCallback((f) => setWs(merge('brief')(f)), []);
   const setAnalysis = useCallback((f) => setWs(merge('analysis')(f)), []);
@@ -104,18 +107,21 @@ export default function App() {
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
 
   const draft = ws && !ws.sample && view === 'home' ? ws : null;
-  const assessment = useBriefAssessment(ws?.brief, lang, view === 'ws' && !!ws);
+  const live = mode === 'live';
+  const assessment = useBriefAssessment(ws?.brief, lang, !live && view === 'ws' && !!ws);
 
   return (
     <div className="app">
-      {view === 'home' ? (
+      {live ? (
+        <LiveApp lang={lang} setLang={setLang} mode={mode} setMode={setMode} toast={toast} />
+      ) : view === 'home' ? (
         <>
-          <HomeBar onHome={() => setView('home')} lang={lang} setLang={setLang} />
+          <HomeBar onHome={() => setView('home')} lang={lang} setLang={setLang} mode={mode} setMode={setMode} />
           <Home onNew={startNew} onOpen={openReport} draft={draft} onResume={() => { setView('ws'); top(); }} />
         </>
       ) : (
         <>
-          <TopBar ws={ws} assessment={assessment} stage={stage} canGo={canGo} onStage={(n) => go(n)} onHome={() => { setView('home'); top(); }} onVersions={() => setVersionsOpen(true)} onShare={() => setShareOpen(true)} lang={lang} setLang={setLang} />
+          <TopBar ws={ws} assessment={assessment} stage={stage} canGo={canGo} onStage={(n) => go(n)} onHome={() => { setView('home'); top(); }} onVersions={() => setVersionsOpen(true)} onShare={() => setShareOpen(true)} lang={lang} setLang={setLang} mode={mode} setMode={setMode} />
           <div className="stage-anim" key={`${stage}-${stage === 2 ? ws.analysis.status : stage === 3 ? ws.deck.status : ''}`}>
             {stage === 1 && <StageBrief ws={ws} assessment={assessment} setBrief={setBrief} briefChanged={briefChanged} onStart={startAnalysis} autoVoice={flags.autoVoice} toast={toast} />}
             {stage === 2 && (
@@ -131,7 +137,7 @@ export default function App() {
           {shareOpen && <ShareModal onClose={() => setShareOpen(false)} toast={toast} />}
         </>
       )}
-      <NotesPanel stageKey={view === 'home' ? 'home' : stage} open={notesOpen} setOpen={setNotesOpen} />
+      {!live && <NotesPanel stageKey={view === 'home' ? 'home' : stage} open={notesOpen} setOpen={setNotesOpen} />}
       <Toasts items={toasts} />
     </div>
   );

@@ -22,7 +22,7 @@ committee-report-assistant/ -->  backend/   port 8001      -->   agents/   port 
 port 5173                        API, database, orchestrator      13 agents, one endpoint each
 ```
 
-- **agents/**: the Brief agent plus 12 pipeline agents. Stateless, JSON in and JSON out. Each agent has a **model path**
+- **agents/**: the Brief agent plus 16 pipeline agents (17 in total). Stateless, JSON in and JSON out. Each agent has a **model path**
   (Foundry / Azure OpenAI) and a **rules path** (plain Python, no model). Mode `auto` uses the model when
   `agents/.env` is complete and otherwise the rules; the response says which one answered (`mode` and `note`).
 - **backend/**: the orchestrator (a plain Python state machine plus a thread job runner), the SQLite database and file store (the
@@ -98,7 +98,7 @@ Invoke-RestMethod http://localhost:8001/health        # status ok
 Invoke-RestMethod http://localhost:8002/v1/agents | Select-Object id, mode
 ```
 
-Expected: 13 agents listed (the Brief agent and 12 pipeline agents) and every `mode` is `rules`, because no model is configured yet. (`/health` also lists them under `agents_available`.)
+Expected: 17 agents listed (the Brief agent and 16 pipeline agents) and every `mode` is `rules`, because no model is configured yet. (`/health` also lists them under `agents_available`.)
 Open http://localhost:5173 : the app starts in German; the Brief stage loads. The API docs are at http://localhost:8001/docs and http://localhost:8002/docs.
 
 Run the tests (about 1 minute). `-m pytest` needs the dev packages first:
@@ -133,7 +133,7 @@ fails on a package (read the error; do not pin random versions), a window closes
 
 ## Task 2: Connect the agents to the Foundry model
 
-Goal: the 13 agents answer with the real model (`mode: llm`) instead of the rules, signing in with the user's Azure account
+Goal: the 17 agents answer with the real model (`mode: llm`) instead of the rules, signing in with the user's Azure account
 the way the colleague's chat app does. Task 1 must be finished first.
 
 ### 2.1 Ask the user for these values (do not guess)
@@ -141,7 +141,8 @@ the way the colleague's chat app does. Task 1 must be finished first.
 - The Foundry / Azure OpenAI **endpoint**, as shown in Foundry (for example `https://<resource>.openai.azure.com` or `https://<resource>.services.ai.azure.com/api/projects/<project>`).
 - The **deployment name** of the chat model (the name of the deployment in Foundry, not the model family). Optional: different deployments for the tiers `small`, `standard`, `strong` and `vision` (see `agents/.env.example`). With one deployment, leave the tiers empty.
 - Whether the user signs in with an **API key** or with their **Azure account**. The expected answer is the Azure account: the colleague's app asked the user to install the Azure CLI and then opened a browser tab to sign in. That is Entra ID sign-in and is supported (below).
-- Optional: the **tenant id**, only if the user has several directories.
+- Optional: the **tenant id**, only if the user has several directories. Instead of the endpoint the user may give the Foundry **resource name** and **project name** (`AZURE_AI_FOUNDRY_RESOURCE`, `AZURE_AI_PROJECT_NAME`); the endpoint is then built from them.
+- No key is ever needed: after the first browser sign-in the account is remembered in `agents/.azure-auth-record.json`.
 
 ### 2.2 Create the settings file
 
@@ -169,12 +170,6 @@ azd and, as the last resort, **a browser tab** (`AZURE_ENTRA_BROWSER=true`, the 
 2. `az login` (a browser tab opens; the user picks the VW account). With several directories: `az login --tenant <tenant id>`.
 3. `az account show` must print the account. Do not print or copy access tokens.
 
-**This organisation signs in with a PKI smart card and its PIN through the cloud identity provider.** There is no username or password step. Consequences for you:
-- Never ask for, type or store a username, password or PIN. The user inserts the card and enters the PIN in the browser or the system dialog themselves.
-- Keep `AZURE_ENTRA_BROWSER=true` (the default) and do not switch to username/password, client-secret or device-code sign-in; device-code login may not work with card-based sign-in. `az login` (browser) is the right command.
-- The browser must be the one that can use the smart card (the user's normal browser). If the card dialog does not appear, tell the user to check that the card is inserted and the card software is running.
-- The sign-in needs the user at the keyboard, so it cannot run unattended. Hosting on Foundry later will use a managed identity instead; do not build anything for that now.
-
 If the Azure CLI cannot be installed, skip it: the first model call opens the browser tab by itself and the user clicks the account.
 The sign-in happens once per start of the agents service, on the first model call, and parallel calls wait for it (there is one tab, not many).
 The user must be present to click.
@@ -199,7 +194,7 @@ Expected: `ok` is true and the agents show `llm`. If `/health/llm` returns an er
 | "no browser" or sign-in errors | No sign-in available | Run `az login`, or tell the user the browser tab must be clicked. |
 | 400 about `response_format` or `json_object` | Model does not support JSON mode | Tell the user which deployment; pick a chat model that does, or report it. |
 
-### 2.5 Test the 12 pipeline agents on the model
+### 2.5 Test the pipeline agents on the model
 
 ```powershell
 backend\.venv\Scripts\python.exe e2e\run_e2e.py --url http://localhost:8001
@@ -215,7 +210,7 @@ Invoke-RestMethod http://localhost:8001/api/v1/reports/<id>/agent-runs | Select-
 For every agent look at `mode` and `note`. **A silent fallback is the main risk**: if the model answers badly or fails, the agent falls back to the rules path and the
 flow still "works" with `mode: rules` and a `note` that says why. A pass of the e2e script is therefore not enough; confirm that the agents ran in `llm` mode.
 
-The model path of the 12 pipeline agents has **never run against a real model** so far; it was tested only with scripted answers. Expect findings:
+The model path of the pipeline agents has **never run against a real model** so far; it was tested only with scripted answers. Expect findings:
 
 - A model answer that does not match the output schema is repaired once, then replaced by the rules answer. If an agent keeps falling back, read its `note`, open its file in `agents/app/agents/<agent>.py` and improve its prompt or its `clean()` logic.
 - **Do not weaken the guard rails** in `clean()` to make the model look better: unknown ids, quotes that do not occur verbatim in the text, and numbers not in the quote must keep being dropped. A claim must never lose its evidence.
@@ -248,9 +243,9 @@ The complete instructions are in **`committee-report-assistant/VW_BRANDING.md`**
 
 ## Not done yet (do not start unless the user asks)
 
-1. Front-end stages 2 (Analysis) and 3 (Report) still show mock data. The backend flow exists under `/api/v1/reports/{id}/...` (table in `backend/README.md`); wiring the screens to it is the next big step.
+1. The front end has two modes: **Demo** (built-in sample data) and **Live** (the real backend, see `README.md`). Live was tested only with the agents in rules mode; run it against the real model (Task 2) and fix what the model changes (prompts are in `agents/app/agents/*.py`).
 2. Speech input uses the browser's speech recognition, which sends audio to Google. Replace with Azure Speech inside the VW tenant before real data is used.
-3. The web researcher is off (`ALLOW_WEB=false`) and only tested with a stub.
+3. Web research is off by default (`ALLOW_WEB=false`). It uses Foundry's web search tool and has only been tested with a stub; check on a real model that pages and quotes come back.
 4. No login and no user roles. SQLite instead of PostgreSQL; local folders instead of SharePoint, Exchange, Teams and SAP connectors; threads instead of a queue. The move to Foundry hosting comes after the local checks.
 5. German wording needs a review by a native speaker.
 

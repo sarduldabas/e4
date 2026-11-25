@@ -31,6 +31,22 @@ class Database:
     def create_all(self) -> None:
         from . import models  # noqa: F401  (registers the tables)
         Base.metadata.create_all(self.engine)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """A database made by an earlier version lacks the columns added since. Adding a nullable column is safe, so do it here."""
+        from sqlalchemy import inspect, text
+
+        insp = inspect(self.engine)
+        with self.engine.begin() as conn:
+            for table in Base.metadata.sorted_tables:
+                if not insp.has_table(table.name):
+                    continue
+                have = {c["name"] for c in insp.get_columns(table.name)}
+                for col in table.columns:
+                    if col.name not in have and not col.primary_key:
+                        ddl = col.type.compile(self.engine.dialect)
+                        conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
 
     @contextmanager
     def session(self):

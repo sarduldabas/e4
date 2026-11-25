@@ -8,6 +8,7 @@ from ..core.calc import CalcError, evaluate
 from ..models import Calculation, Claim, Evidence, Flag, SectionDraft
 from .ctx import (Context, calc_payload, claim_payload, current_claims, draft_of, evidence_refs, get_report, log_event, outline, set_state)
 from .jobs import Progress
+from .retrieval import Index, load_passages
 
 
 def _close(a: float, b: float) -> bool:
@@ -19,14 +20,16 @@ def run_analyse(ctx: Context, rid: str, prog: Progress, only: list[str] | None =
         r = get_report(s, rid)
         set_state(s, r, "ANALYSING")
         ver = r.version_no
-        base = {"lang": r.lang, "topic": r.topic or r.title, "committee": r.committee or None}
+        base = {"lang": r.lang, "topic": r.topic or r.title, "committee": r.committee or None, "decision_requested": r.decision_requested or "", "description": r.description or "",
+                "outline": [o.title for o in outline(s, rid)]}
         secs = [{"key": o.key, "title": o.title, "purpose": o.purpose, "required_inputs": o.required_inputs} for o in outline(s, rid) if not only or o.key in only]
+    index = Index(load_passages(ctx, rid))  # the original text of every source, searchable; each section reads what matters to it
     done = [0]
     prog.update("analysing", 0, len(secs) + 1, f"{len(secs)} Abschnitte analysieren")
 
     def work(sec: dict):
         try:
-            analyse_section(ctx, rid, ver, base, sec, (instructions or {}).get(sec["key"]))
+            analyse_section(ctx, rid, ver, base, sec, (instructions or {}).get(sec["key"]), index)
         finally:
             done[0] += 1
             prog.update("analysing", done[0], len(secs) + 1, f"Abschnitt „{sec['title']}“ fertig")
@@ -42,10 +45,19 @@ def run_analyse(ctx: Context, rid: str, prog: Progress, only: list[str] | None =
     prog.update("analysed", len(secs) + 1, len(secs) + 1)
 
 
-def analyse_section(ctx: Context, rid: str, ver: int, base: dict, sec: dict, instruction: str | None = None) -> None:
+def section_passages(ctx: Context, index: Index | None, base: dict, sec: dict, instruction: str | None) -> list[dict]:
+    """The raw text most relevant to one section, up to the budget: what the analyst reads besides the extracted evidence."""
+    if not index or not index.passages:
+        return []
+    query = " ".join([sec["title"], sec.get("purpose", ""), " ".join(sec.get("required_inputs", [])), base.get("topic", ""), instruction or ""])
+    return [{"id": p.id, "source": p.source_title, "locator": p.locator, "text": p.text} for p in index.top(query, ctx.settings.passage_chars)]
+
+
+def analyse_section(ctx: Context, rid: str, ver: int, base: dict, sec: dict, instruction: str | None = None, index: Index | None = None) -> None:
     with ctx.db.session() as s:
-        ev = evidence_refs(s, rid, sec["key"])
+        ev = evidence_refs(s, rid, sec["key"], limit=120)
     ev_by_id = {e["id"]: e for e in ev}
+    passages = section_passages(ctx, index, base, sec, instruction)
     asec = {"key": sec["key"], "title": sec["title"], "purpose": sec.get("purpose", ""), "required_inputs": sec.get("required_inputs", [])}
 
     # plan -> calculate in code
@@ -64,7 +76,9 @@ def analyse_section(ctx: Context, rid: str, ver: int, base: dict, sec: dict, ins
 
     max_rounds = max(1, ctx.settings.max_analysis_rounds)
     write_in = {**base, "mode": "write", "section": asec, "evidence": ev, "calculations": calcs, "instruction": instruction, "round": 1}
+    write_in["passages"] = passages
     draft = ctx.runner.run("section-analyst", write_in, report_id=rid)
+    draft = _take_new_evidence(ctx, rid, sec["key"], draft, ev, ev_by_id, passages)
     rounds, check = 1, None
     while True:
         check = ctx.runner.run("verifier", {"lang": base["lang"], "section_key": sec["key"], "section_title": sec["title"], "headline": draft["headline"],
@@ -74,7 +88,8 @@ def analyse_section(ctx: Context, rid: str, ver: int, base: dict, sec: dict, ins
             break
         rounds += 1
         issues = [{"claim_id": c["claim_id"], "severity": c["severity"], "message": "; ".join(c["issues"]) + (f" Vorschlag: {c['fix']}" if c.get("fix") else "")} for c in problems]
-        draft = ctx.runner.run("section-analyst", {**write_in, "previous_claims": draft["claims"], "issues": issues, "round": rounds}, report_id=rid)
+        draft = ctx.runner.run("section-analyst", {**write_in, "evidence": ev, "previous_claims": draft["claims"], "issues": issues, "round": rounds}, report_id=rid)
+        draft = _take_new_evidence(ctx, rid, sec["key"], draft, ev, ev_by_id, passages)
 
     # persist (replaces an earlier run of the same section and version)
     checks = {c["claim_id"]: c for c in check["checks"]}
@@ -115,6 +130,44 @@ def analyse_section(ctx: Context, rid: str, ver: int, base: dict, sec: dict, ins
                 charts.append({**ch, "calc_ids": [calc_id[i] for i in ch["calc_ids"] if i in calc_id], "claim_ids": [claim_id[i] for i in ch["claim_ids"] if i in claim_id]})
         blockers = any(c["severity"] == "blocker" for c in check["checks"])
         s.add(SectionDraft(report_id=rid, section_key=sec["key"], version_no=ver, headline=draft["headline"], charts=charts, open_points=draft["open_points"], rounds=rounds, verified=not blockers))
+
+
+def _take_new_evidence(ctx: Context, rid: str, section_key: str, draft: dict, ev: list[dict], ev_by_id: dict, passages: list[dict]) -> dict:
+    """Findings the analyst took from the raw text become evidence in the ledger (they were checked against the passage); claims then cite real ids."""
+    new = draft.get("new_evidence") or []
+    if not new:
+        return draft
+    from ..models import Source
+
+    by_pid = {p["id"]: p for p in passages}
+    remap: dict[str, str] = {}
+    with ctx.db.session() as s:
+        have = {(e.section_key, e.statement.lower()): e.id for e in s.query(Evidence).filter_by(report_id=rid).all()}
+        srcs = {x.id: x for x in s.query(Source).filter(Source.report_id == rid).all()}
+        for n in new:
+            sig = (section_key, n["statement"].lower())
+            if sig in have:
+                remap[n["id"]] = have[sig]
+                continue
+            sid = n["passage_id"].split("#")[0]
+            src = srcs.get(sid)
+            row = Evidence(report_id=rid, section_key=section_key, origin="web" if src and src.kind == "web" else "document", source_id=sid, kind=n["kind"], statement=n["statement"],
+                           quote=n["quote"], locator=by_pid.get(n["passage_id"], {}).get("locator", "")[:300], value=n.get("value"), unit=n.get("unit"), entity=n.get("entity"),
+                           period=n.get("period"), confidence=0.75)
+            s.add(row)
+            s.flush()
+            have[sig] = row.id
+            remap[n["id"]] = row.id
+            ref = {"id": row.id, "kind": row.kind, "statement": row.statement, "quote": row.quote, "value": row.value, "unit": row.unit,
+                   "source": f"{src.title}, {row.locator}" if src else row.locator, "user_provided": False}
+            if row.id not in ev_by_id:
+                ev.append(ref)
+                ev_by_id[row.id] = ref
+    for c in draft["claims"]:
+        c["evidence_ids"] = [remap.get(i, i) for i in c["evidence_ids"]]
+    for ch in draft["charts"]:
+        ch["evidence_ids"] = [remap.get(i, i) for i in ch["evidence_ids"]]
+    return {**draft, "new_evidence": []}
 
 
 def run_red_team(ctx: Context, rid: str, ver: int, base: dict) -> None:

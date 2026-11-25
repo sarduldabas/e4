@@ -7,6 +7,7 @@ from datetime import datetime
 from ..core.parsers import SUPPORTED, kind_of
 from ..core.storage import safe_name, sha256
 from ..models import AgentRun, Asset, Calculation, Claim, Deck, Event, Evidence, FileRow, Flag, Job, Report, SectionDraft, Slide, Source
+from . import slides as slides_service
 from . import analyse, collect, feedback, generate, outline as outline_svc
 from .ctx import (Blocked, Context, NotFound, StateError, calc_payload, claim_payload, current_claims, draft_of, get_report, log_event, open_blockers, outline,
                   require_state, set_state)
@@ -34,7 +35,7 @@ class Orchestrator:
                 "slides": s.query(Slide).filter_by(report_id=rid, version_no=ver).count(),
             }
             return {"id": r.id, "title": r.title, "topic": r.topic, "description": r.description, "decision_requested": r.decision_requested, "lang": r.lang, "links": r.links or [],
-                    "committee": r.committee, "date": r.date, "version": r.version, "version_no": ver, "state": r.state, "stage": r.stage, "counts": counts,
+                    "use_web": bool(r.use_web), "web_enabled": self.ctx.settings.allow_web, "committee": r.committee, "date": r.date, "version": r.version, "version_no": ver, "state": r.state, "stage": r.stage, "counts": counts,
                     "open_blockers": len(blockers), "deck": {"version": deck.version_no, "slides": deck.slide_count, "changes": deck.changes} if deck else None,
                     "job": self._job_view(job) if job else None}
 
@@ -60,6 +61,8 @@ class Orchestrator:
                     setattr(r, k, data[k])
             if data.get("links") is not None:
                 r.links = [str(x)[:500] for x in data["links"]][:50]
+            if data.get("use_web") is not None:
+                r.use_web = bool(data["use_web"])
             if data.get("committee_id"):
                 from ..models import Committee
                 c = s.get(Committee, data["committee_id"])
@@ -83,7 +86,9 @@ class Orchestrator:
             r = get_report(s, rid)
             if r.state not in ("SETUP", "OUTLINE_REVIEW", "COLLECTING", "FEEDBACK", "DECK_REVIEW", "FINDINGS_REVIEW", "FINAL"):
                 raise StateError("files can not be added now")
-            f = FileRow(report_id=rid, role=role, name=safe_name(name), kind=kind, key="", size=len(data), sha256=sha256(data))
+            from .ingest import preflight
+            f = FileRow(report_id=rid, role=role, name=safe_name(name), kind=kind, key="", size=len(data), sha256=sha256(data),
+                        info=preflight(name, data) if role != "template" else None)
             s.add(f)
             s.flush()
             f.key = self.ctx.store.put(f"reports/{rid}/files/{f.id}-{f.name}", data)
@@ -92,7 +97,7 @@ class Orchestrator:
 
     @staticmethod
     def _file_view(f: FileRow) -> dict:
-        return {"id": f.id, "role": f.role, "name": f.name, "kind": f.kind, "size": f.size}
+        return {"id": f.id, "role": f.role, "name": f.name, "kind": f.kind, "size": f.size, "info": f.info}
 
     def files(self, rid: str) -> list[dict]:
         with self.ctx.db.session() as s:
@@ -113,7 +118,8 @@ class Orchestrator:
         with self.ctx.db.session() as s:
             get_report(s, rid)
             return [{"id": x.id, "kind": x.kind, "title": x.title, "status": x.status, "relevance": x.relevance, "section_keys": x.section_keys, "reason": x.reason,
-                     "chunks": x.chunk_count, "error": x.error, "duplicate_of": x.duplicate_of} for x in s.query(Source).filter_by(report_id=rid).order_by(Source.created_at).all()]
+                     "chunks": x.chunk_count, "error": x.error, "duplicate_of": x.duplicate_of, "ref": x.ref if x.kind == "web" and x.ref.startswith("http") else None,
+                     "info": x.info} for x in s.query(Source).filter_by(report_id=rid).order_by(Source.created_at).all()]
 
     # ------------------------------------------------------------------ checkpoint 1: outline
     def propose_outline(self, rid: str) -> dict:
@@ -267,47 +273,25 @@ class Orchestrator:
 
     # ------------------------------------------------------------------ checkpoint 3: deck
     def deck(self, rid: str) -> dict:
-        with self.ctx.db.session() as s:
-            r = get_report(s, rid)
-            ver = r.version_no
-            order = {o.key: o.position for o in outline(s, rid)}
-            titles = {o.key: o.title for o in outline(s, rid)}
-            slides = [x for x in s.query(Slide).filter_by(report_id=rid, version_no=ver).all() if x.section_key in order]
-            slides.sort(key=lambda x: (order[x.section_key], x.position))
-            claims = {c.id: c for c in s.query(Claim).filter_by(report_id=rid, version_no=ver).all()}
-            d = s.query(Deck).filter_by(report_id=rid, version_no=ver).first()
-            return {"version": r.version, "state": r.state, "has_file": bool(d), "changes": d.changes if d else [],
-                    "slides": [{"id": x.id, "section_key": x.section_key, "section": titles[x.section_key], "title": x.title, "bullets": x.bullets, "chart": x.chart, "notes": x.notes,
-                                "asset_ids": x.asset_ids, "user_edited": x.user_edited,
-                                "claims": [{"id": cid, "text": claims[cid].text} for cid in dict.fromkeys(c for b in x.bullets for c in b.get("claim_ids", [])) if cid in claims]} for x in slides]}
+        return slides_service.deck_view(self.ctx, rid)
 
-    def update_slide(self, rid: str, slide_id: str, title: str | None = None, bullets: list[str] | None = None) -> dict:
-        warnings: list[str] = []
-        with self.ctx.db.session() as s:
-            r = get_report(s, rid)
-            require_state(r, "DECK_REVIEW")
-            sl = s.get(Slide, slide_id)
-            if not sl or sl.report_id != rid or sl.version_no != r.version_no:
-                raise NotFound(slide_id)
-            if title is not None and title.strip():
-                sl.title = title.strip()[:300]
-            if bullets is not None:
-                from .ctx import numbers_in
-                old = sl.bullets
-                claims = {c.id: c.text for c in s.query(Claim).filter_by(report_id=rid, version_no=r.version_no).all()}
-                known = set().union(*[numbers_in(claims.get(cid, "")) for b in old for cid in b.get("claim_ids", [])]) if old else set()
-                new = []
-                for i, t in enumerate(b.strip() for b in bullets if b.strip()):
-                    ids = old[i]["claim_ids"] if i < len(old) else []
-                    extra = numbers_in(t) - known - numbers_in(sl.title)
-                    if extra:
-                        warnings.append(f"„{t[:40]}…“: {', '.join(sorted(extra))} " + ("steht in keiner belegten Aussage." if r.lang == "de" else "is not in any verified claim."))
-                    new.append({"text": t, "claim_ids": ids})
-                sl.bullets = new
-            sl.user_edited = True
-            log_event(s, rid, "slide_edited", slide=slide_id, warnings=len(warnings))
-        generate.build_deck_file(self.ctx, rid)
-        return {"id": slide_id, "warnings": warnings}
+    def update_slide(self, rid: str, slide_id: str, title: str | None = None, bullets: list[str] | None = None, spec: dict | None = None) -> dict:
+        return slides_service.patch_slide(self.ctx, rid, slide_id, title=title, bullets=bullets, spec=spec)
+
+    def revise_slide(self, rid: str, slide_id: str, instruction: str) -> dict:
+        return slides_service.revise_slide(self.ctx, rid, slide_id, instruction)
+
+    def undo_slide(self, rid: str, slide_id: str) -> dict:
+        return slides_service.undo_slide(self.ctx, rid, slide_id)
+
+    def add_slide(self, rid: str, after: str | None, layout: str) -> dict:
+        return slides_service.add_slide(self.ctx, rid, after, layout)
+
+    def delete_slide(self, rid: str, slide_id: str) -> None:
+        slides_service.delete_slide(self.ctx, rid, slide_id)
+
+    def move_slide(self, rid: str, slide_id: str, index: int) -> None:
+        slides_service.move_slide(self.ctx, rid, slide_id, index)
 
     def reorder_slides(self, rid: str, section_order: list[str]) -> list[str]:
         with self.ctx.db.session() as s:
@@ -323,13 +307,17 @@ class Orchestrator:
         return section_order
 
     def deck_file(self, rid: str) -> tuple[str, bytes]:
+        """The PowerPoint file is built from the slides as they are now, so the download always equals what the page shows."""
         with self.ctx.db.session() as s:
             r = get_report(s, rid)
             d = s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first()
             if not d:
                 raise NotFound("no deck yet")
             name = f"{safe_name(r.title)[:60]}_{r.version}.pptx"
-            key = d.key
+        generate.build_deck_file(self.ctx, rid)
+        with self.ctx.db.session() as s:
+            r = get_report(s, rid)
+            key = s.query(Deck).filter_by(report_id=rid, version_no=r.version_no).first().key
         return name, self.ctx.store.get(key)
 
     def finalize(self, rid: str) -> dict:
@@ -357,12 +345,47 @@ class Orchestrator:
             get_report(s, rid)
             return [{"kind": e.kind, "payload": e.payload, "at": e.created_at.isoformat()} for e in s.query(Event).filter_by(report_id=rid).order_by(Event.created_at, Event.id).all()]
 
+    def asset_bytes(self, rid: str, asset_id: str) -> tuple[bytes, str]:
+        with self.ctx.db.session() as s:
+            get_report(s, rid)
+            a = s.get(Asset, asset_id)
+            if not a or a.report_id != rid or not a.key:
+                raise NotFound(asset_id)
+            data = self.ctx.store.get(a.key)
+        mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg" if data[:3] == b"\xff\xd8\xff" else "image/gif" if data[:3] == b"GIF" else "application/octet-stream"
+        return data, mime
+
     def agent_runs(self, rid: str, with_io: bool = False) -> list[dict]:
         with self.ctx.db.session() as s:
             get_report(s, rid)
             rows = s.query(AgentRun).filter_by(report_id=rid).order_by(AgentRun.created_at, AgentRun.id).all()
             return [{"id": a.id, "agent": a.agent_id, "mode": a.mode, "model": a.model, "status": a.status, "error": a.error, "note": a.note, "duration_ms": a.duration_ms, "usage": a.usage,
                      "at": a.created_at.isoformat(), **({"input": a.input, "output": a.output} if with_io else {})} for a in rows]
+
+    def agent_summary(self, rid: str) -> dict:
+        """The audit view: calls, tokens and time per agent, and which calls ran on the model and which on the rules version."""
+        with self.ctx.db.session() as s:
+            get_report(s, rid)
+            rows = s.query(AgentRun).filter_by(report_id=rid).order_by(AgentRun.created_at, AgentRun.id).all()
+            per: dict[str, dict] = {}
+            for a in rows:
+                p = per.setdefault(a.agent_id, {"agent": a.agent_id, "calls": 0, "llm": 0, "rules": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0, "duration_ms": 0, "models": set()})
+                p["calls"] += 1
+                if a.status != "ok":
+                    p["errors"] += 1
+                elif a.mode == "llm":
+                    p["llm"] += 1
+                else:
+                    p["rules"] += 1
+                p["prompt_tokens"] += int((a.usage or {}).get("prompt_tokens", 0) or 0)
+                p["completion_tokens"] += int((a.usage or {}).get("completion_tokens", 0) or 0)
+                p["duration_ms"] += a.duration_ms or 0
+                if a.model:
+                    p["models"].add(a.model)
+            agents = sorted(({**p, "models": sorted(p["models"])} for p in per.values()), key=lambda p: -p["duration_ms"])
+            tot = {"calls": len(rows), "llm": sum(p["llm"] for p in agents), "rules": sum(p["rules"] for p in agents), "errors": sum(p["errors"] for p in agents),
+                   "prompt_tokens": sum(p["prompt_tokens"] for p in agents), "completion_tokens": sum(p["completion_tokens"] for p in agents), "duration_ms": sum(p["duration_ms"] for p in agents)}
+            return {"total": tot, "agents": agents}
 
     def purge(self, rid: str) -> None:
         """Called when a report is deleted: its files and its audit trail go with it."""

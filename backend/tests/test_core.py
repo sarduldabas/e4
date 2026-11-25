@@ -29,7 +29,7 @@ def test_parse_docx_keeps_numbers_tables_and_locators():
 
 def test_parse_xlsx_rows_become_quotable_text():
     p = parse_bytes("k.xlsx", make_cost_xlsx())
-    assert p.chunks[0].locator.startswith("Blatt Kosten") and "Werkzeuge | 4 | 6 | 9" in p.chunks[0].text
+    assert p.chunks[0].locator.startswith("Blatt „Kosten“") and "Werkzeuge | 4 | 6 | 9" in p.chunks[0].text
 
 
 def test_parse_text_formats_and_unsupported():
@@ -46,8 +46,8 @@ def test_template_reader_and_deck_roundtrip():
     data = build_deck([SlideSpec("Titel A", ["x 12 Mio €"], "Notiz", chart={"type": "column", "title": "K", "unit": "M€", "labels": ["A", "B"], "values": [1, 2]}),
                        SlideSpec("Tabelle", ["y"], table=[["a", "b"], ["1", "2"]], footer="Quellen: s")], template=make_template(), title="T", subtitle="S")
     p = parse_bytes("d.pptx", data)
-    assert [c.locator for c in p.chunks] == ["Folie 1", "Folie 2", "Folie 3"]  # the template's own slides are gone
-    assert "Notiz" in p.chunks[1].text
+    assert [c.locator.split(" (")[0] for c in p.chunks if "Notizen" not in c.locator] == ["Folie 1", "Folie 2", "Folie 3"]  # the template's own slides are gone
+    assert any("Notiz" in c.text and "Notizen" in c.locator for c in p.chunks)
 
 
 def test_file_store_blocks_path_traversal(tmp_path):

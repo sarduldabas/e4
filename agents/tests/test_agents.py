@@ -1,4 +1,4 @@
-"""The 12 pipeline agents: rules versions, model path with guard rails, and the HTTP envelope."""
+"""The pipeline agents: rules versions, model path with guard rails, and the HTTP envelope."""
 from fastapi.testclient import TestClient
 
 from app.agents.core import AgentRunner
@@ -35,11 +35,11 @@ class Scripted:
         return a
 
 
-def test_registry_has_twelve_agents_with_unique_ids():
+def test_registry_has_the_pipeline_agents_with_unique_ids():
     reg = build_registry()
-    assert len(reg) == 12 and set(reg) == {
-        "template-analyst", "interviewer", "source-planner", "source-screener", "web-researcher", "evidence-extractor",
-        "asset-curator", "section-analyst", "verifier", "red-team", "slide-writer", "feedback-interpreter"}
+    assert len(reg) == 17 and set(reg) == {
+        "brief", "template-analyst", "interviewer", "source-planner", "source-screener", "web-researcher", "evidence-extractor",
+        "asset-curator", "section-analyst", "verifier", "red-team", "slide-writer", "feedback-interpreter", "document-reader", "web-search", "storyline-architect", "slide-editor"}
     for a in reg.values():
         assert "JSON Schema" in a.system_prompt() and a.id in a.info()["endpoint"]
 
@@ -135,21 +135,85 @@ def test_red_team_flags_unverified_sections_and_cross_section_conflicts():
     assert any(c.severity == "blocker" for c in clean.challenges)
 
 
-def test_slide_writer_never_keeps_a_bullet_without_an_approved_claim():
-    sec = SlideSection(key="options", title="Optionen", headline="A ist günstiger", claims=[Claim(id="k1", text="Option A kostet 12 Mio €.", evidence_ids=["e1"])])
-    model = {"slides": [{"title": "A ist günstiger", "bullets": [{"text": "Option A kostet 12 Mio €.", "claim_ids": ["k1"]}, {"text": "Erfundene Aussage", "claim_ids": ["k7"]}, {"text": "Ohne Quelle", "claim_ids": []}], "chart_id": "nope"}]}
-    out = AgentRunner(Scripted(model)).run(SlideWriter(), SlideWriterInput(section=sec)).output
-    assert [b.text for b in out.slides[0].bullets] == ["Option A kostet 12 Mio €."] and out.slides[0].chart_id is None
+def _sec():
+    return SlideSection(key="options", title="Optionen", headline="A ist günstiger", claims=[Claim(id="k1", text="Option A kostet 12 Mio €.", evidence_ids=["e1"], calc_ids=[])])
+
+
+def test_slide_writer_never_keeps_a_bullet_or_key_figure_without_an_approved_claim():
+    model = {"slides": [{"layout": "kpi-bullets", "title": "A ist günstiger", "blocks": [
+        {"slot": "kpis", "type": "kpis", "items": [{"value": "12,0", "unit": "Mio. €", "label": "Option A", "claim_ids": ["k1"]}, {"value": "99", "label": "Erfunden", "claim_ids": ["k9"]}]},
+        {"slot": "bullets", "type": "bullets", "items": [{"text": "Option A kostet 12 Mio €.", "claim_ids": ["k1"]}, {"text": "Erfundene Aussage", "claim_ids": ["k7"]}, {"text": "Ohne Quelle", "claim_ids": []}]},
+        {"slot": "chart", "type": "chart", "chart": {"labels": ["A"], "series": [{"name": "x", "values": [1]}]}, "claim_ids": ["k1"]}]}]}
+    out = AgentRunner(Scripted(model)).run(SlideWriter(), SlideWriterInput(section=_sec())).output
+    blocks = {b.slot: b for b in out.slides[0].blocks}
+    assert [i["label"] for i in blocks["kpis"].items] == ["Option A"]
+    assert [i["text"] for i in blocks["bullets"].items] == ["Option A kostet 12 Mio €."]
+    assert "chart" not in blocks  # the layout has no chart slot
+
+
+def test_slide_writer_falls_back_to_a_complete_slide_when_the_model_returns_nothing_usable():
+    out = AgentRunner(Scripted({"slides": [{"layout": "nope", "title": "x", "blocks": []}]})).run(SlideWriter(), SlideWriterInput(section=_sec())).output
+    assert out.slides and out.slides[0].blocks and out.slides[0].blocks[0].items[0]["claim_ids"] == ["k1"]
+
+
+def test_storyline_architect_cites_only_approved_claims_and_keeps_next_steps_without_claims():
+    from app.agents.slides_common import Number
+    from app.agents.storyline_architect import ArchClaim, ArchSection, StorylineArchitect, StorylineInput
+    inp = StorylineInput(decision_requested="Option A beschließen", sections=[ArchSection(key="options", title="Optionen", headline="A ist günstiger", claims=[ArchClaim(id="k1", text="Option A kostet 12 Mio €.")])],
+                         numbers=[Number(ref="n1", label="Option A", text="12,0", value=12, unit="Mio. €", claim_ids=["k1"])])
+    model = {"deck_title": "Lieferantenentscheidung", "slides_per_section": {"options": 2, "ghost": 3},
+             "summary": {"layout": "exec-summary", "title": "A ist günstiger", "blocks": [
+                 {"slot": "kpis", "type": "kpis", "items": [{"value": "12,0", "unit": "Mio. €", "label": "Option A", "claim_ids": ["k1"]}]},
+                 {"slot": "bullets", "type": "bullets", "items": [{"text": "A kostet 12 Mio €", "claim_ids": ["k1"]}, {"text": "Erfunden", "claim_ids": ["k5"]}]},
+                 {"slot": "callout", "type": "callout", "title": "Beschluss", "text": "A beschließen", "tone": "decision"}]},
+             "decision": {"layout": "decision", "title": "Beschluss", "blocks": [
+                 {"slot": "callout", "type": "callout", "title": "Beschlussvorschlag", "text": "Option A wird beschlossen.", "tone": "decision"},
+                 {"slot": "bullets", "type": "bullets", "items": [{"text": "Grund ohne Beleg", "claim_ids": []}]},
+                 {"slot": "bullets2", "type": "bullets", "items": [{"text": "Vertrag vorbereiten", "claim_ids": []}]}]}}
+    out = AgentRunner(Scripted(model)).run(StorylineArchitect(), inp).output
+    s = {b.slot: b for b in out.summary.blocks}
+    assert [i["text"] for i in s["bullets"].items] == ["A kostet 12 Mio €"]
+    d = {b.slot: b for b in out.decision.blocks}
+    assert "bullets" not in d and d["bullets2"].items[0]["text"] == "Vertrag vorbereiten"
+    assert out.slides_per_section == {"options": 2}
+
+
+def test_slide_editor_leaves_the_slide_alone_when_the_change_cannot_be_applied():
+    from app.agents.slide_editor import SlideEditor, SlideEditorInput
+    from app.agents.slides_common import Block, SlideSpecOut
+    cur = SlideSpecOut(layout="bullets", title="A ist günstiger", blocks=[Block(slot="bullets", type="bullets", items=[{"text": "A kostet 12 Mio €", "claim_ids": ["k1"]}])])
+    out = AgentRunner(Scripted({"slide": {"layout": "zzz", "title": "x", "blocks": []}, "summary": "", "needs": ["Zahl fehlt"]})).run(SlideEditor(), SlideEditorInput(slide=cur, instruction="Ergänze die Marge")).output
+    assert out.slide == cur and out.needs and "Zahl fehlt" in out.needs[0]
 
 
 def test_http_envelope_and_validation():
     client = TestClient(create_app(Settings(agent_mode="rules")))
     agents = client.get("/v1/agents").json()
     assert {a["id"] for a in agents if a["status"] == "available"} >= {"brief", "verifier", "red-team", "feedback-interpreter"}
-    assert len([a for a in agents if a["id"] != "brief"]) == 12
+    assert len(agents) == 17 and sum(a["id"] == "brief" for a in agents) == 1
     r = client.post("/v1/agents/template-analyst/run", json={"lang": "en", "topic": "x"})
     body = r.json()
     assert r.status_code == 200 and body["mode"] == "rules" and len(body["output"]["sections"]) == 7
     assert client.post("/v1/agents/verifier/run", json={}).status_code == 422
     assert client.post("/v1/agents/ghost/run", json={}).status_code == 404
     assert "properties" in client.get("/v1/agents/verifier/schema").json()["output"]
+
+
+def test_brief_agent_runs_through_the_common_envelope_and_the_old_route_still_works():
+    client = TestClient(create_app(Settings(agent_mode="rules")))
+    body = {"lang": "de", "text": "Beschaffung von Batteriezellen für den Lenkungskreis am 12.12.2026, Entscheidung über die Lieferantenstrategie."}
+    env = client.post("/v1/agents/brief/run", json=body).json()
+    old = client.post("/v1/brief/assess", json=body).json()
+    assert env["agent"] == "brief" and env["mode"] == "rules"
+    assert env["output"]["strength"]["score"] == old["strength"]["score"] and env["output"]["understood"] == old["understood"]
+
+
+def test_endpoint_is_built_from_resource_and_project_names(monkeypatch):
+    from app import config
+    for k in ("AZURE_OPENAI_ENDPOINT", "AZURE_AI_PROJECT_ENDPOINT", "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", "FOUNDRY_PROJECT_ENDPOINT", "PROJECT_ENDPOINT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AZURE_AI_FOUNDRY_RESOURCE", "vw-res")
+    monkeypatch.setenv("AZURE_AI_PROJECT_NAME", "coe4")
+    assert config._endpoint_from_env() == "https://vw-res.services.ai.azure.com/api/projects/coe4"
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.openai.azure.com/openai/v1")
+    assert config._endpoint_from_env() == "https://x.openai.azure.com"

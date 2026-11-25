@@ -1,0 +1,6 @@
+{
+  "colors": {"primary": "#001E50", "accent": "#00B0F0", "text": "#1B1E21", "muted": "#5B6670", "line": "#D5DBE0", "soft": "#F2F5F8", "bg": "#FFFFFF",
+             "good": "#1E8E5A", "warn": "#C77700", "crit": "#C0392B", "on_primary": "#FFFFFF"},
+  "palette": ["#001E50", "#00B0F0", "#5B6670", "#8DA2B8", "#1E8E5A", "#C77700"],
+  "fonts": {"heading": "Arial", "body": "Arial"}
+}

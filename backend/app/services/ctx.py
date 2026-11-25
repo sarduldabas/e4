@@ -117,7 +117,7 @@ def evidence_refs(s: Session, rid: str, section_key: str, limit: int = 40) -> li
     out = []
     for e in rows[:limit]:
         label = "Ihre Angabe" if e.origin == "user" else source_label(srcs.get(e.source_id), e.locator)
-        out.append({"id": e.id, "kind": e.kind, "statement": e.statement, "quote": e.quote, "value": e.value, "unit": e.unit, "source": label, "user_provided": e.origin == "user"})
+        out.append({"id": e.id, "kind": e.kind, "statement": e.statement, "quote": e.quote, "value": e.value, "unit": e.unit, "entity": e.entity, "period": e.period, "source": label, "user_provided": e.origin == "user"})
     return out
 
 

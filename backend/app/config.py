@@ -30,7 +30,13 @@ class Settings:
     allow_web: bool = False  # the web-researcher may fetch public pages only when this is true
     max_upload_mb: int = 50
     parallel_sections: int = 4
+    parallel_calls: int = 6  # agent calls made at the same time while reading and extracting
     max_analysis_rounds: int = 2
+    max_vision_pages: int = 60  # pages and pictures per file that may be read by the vision model
+    extract_batch_chars: int = 16000  # text given to the evidence extractor per call
+    max_extract_chars: int = 900000  # per source; beyond this the passages most relevant to the outline are read first
+    passage_chars: int = 60000  # raw text from the sources that the section analyst may read per section
+    demo_dir: str = ""
 
     @property
     def db_url(self) -> str:
@@ -50,4 +56,9 @@ def load_settings() -> Settings:
     s.allow_web = os.environ.get("ALLOW_WEB", "").lower() in ("1", "true", "yes")
     s.max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", s.max_upload_mb))
     s.parallel_sections = int(os.environ.get("PARALLEL_SECTIONS", s.parallel_sections))
+    s.parallel_calls = int(os.environ.get("PARALLEL_CALLS", s.parallel_calls))
+    s.max_vision_pages = int(os.environ.get("MAX_VISION_PAGES", s.max_vision_pages))
+    s.extract_batch_chars = int(os.environ.get("EXTRACT_BATCH_CHARS", s.extract_batch_chars))
+    s.max_extract_chars = int(os.environ.get("MAX_EXTRACT_CHARS", s.max_extract_chars))
+    s.passage_chars = int(os.environ.get("PASSAGE_CHARS", s.passage_chars))
     return s

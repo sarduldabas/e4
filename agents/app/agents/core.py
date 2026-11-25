@@ -68,6 +68,11 @@ class BaseAgent(Generic[I, O]):
     def images(self, inp: I) -> list[str]:
         return []
 
+    def run_model(self, inp: I, llm) -> "tuple[O, dict] | None":
+        """Agents that use a model tool (web search) or several calls override this and return (output, usage).
+        The default (None) means: one JSON call with the system prompt, handled by the runner."""
+        return None
+
     def user_message(self, inp: I) -> str:
         return inp.model_dump_json(exclude_none=True, exclude=self._image_fields())
 
@@ -84,14 +89,19 @@ class BaseAgent(Generic[I, O]):
                 "status": "available", "description": self.description, "endpoint": f"/v1/agents/{self.id}/run"}
 
 
+class AgentFailed(Exception):
+    """The model failed and the settings say not to fall back to the rules version (AGENT_FALLBACK=error)."""
+
+
 class AgentRunner:
     """Runs agents with the configured model, or with their rules versions."""
 
     COOLDOWN_SECONDS = 30
 
-    def __init__(self, llm: LlmClient | None, mode: str = "auto"):
+    def __init__(self, llm: LlmClient | None, mode: str = "auto", fallback: str = "rules"):
         self.llm = llm
         self.mode = mode  # auto | llm | rules
+        self.fallback = fallback  # rules | error
         self._down_until = 0.0
         self._lock = threading.Lock()
 
@@ -108,7 +118,7 @@ class AgentRunner:
 
         if not self.uses_model:
             return done(RunResult(agent.clean(inp, agent.rules(inp)), "rules"))
-        if time.monotonic() < self._down_until:
+        if time.monotonic() < self._down_until and self.fallback != "error":
             return done(RunResult(agent.clean(inp, agent.rules(inp)), "rules", note="model temporarily skipped after an earlier failure"))
         try:
             out, usage = self._ask(agent, inp)
@@ -118,9 +128,14 @@ class AgentRunner:
                 with self._lock:
                     self._down_until = time.monotonic() + self.COOLDOWN_SECONDS
             log.warning("agent %s fell back to rules: %s", agent.id, str(e)[:300])
+            if self.fallback == "error":
+                raise AgentFailed(f"{agent.id}: {str(e)[:300]}") from e
             return done(RunResult(agent.clean(inp, agent.rules(inp)), "rules", note=f"model not used: {str(e)[:200]}"))
 
     def _ask(self, agent: BaseAgent, inp: BaseModel) -> tuple[BaseModel, dict]:
+        custom = agent.run_model(inp, self.llm)
+        if custom is not None:
+            return agent.clean(inp, custom[0]), custom[1]
         system, user, images = agent.system_prompt(), agent.user_message(inp), agent.images(inp) or None
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
 

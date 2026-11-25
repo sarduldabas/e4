@@ -15,6 +15,20 @@ class AgentCallFailed(Exception):
         self.agent_id, self.unreachable = agent_id, unreachable
 
 
+def shrink(x, limit: int = 3000, depth: int = 0):
+    """What the audit trail keeps of a payload: pictures become a size note and long texts are cut, so the trail stays readable and small."""
+    if isinstance(x, str):
+        if x.startswith("data:image"):
+            return f"[Bild, {len(x) // 1365} KB]"
+        return x if len(x) <= limit else x[:limit] + f" …[+{len(x) - limit} Zeichen]"
+    if isinstance(x, list):
+        out = [shrink(i, limit, depth + 1) for i in x[:80]]
+        return out + [f"…[+{len(x) - 80} Einträge]"] if len(x) > 80 else out
+    if isinstance(x, dict):
+        return {k: shrink(v, limit, depth + 1) for k, v in x.items()}
+    return x
+
+
 class AgentsRunner:
     """Synchronous. Stateless agents: the payload is the only thing they get."""
 
@@ -26,6 +40,10 @@ class AgentsRunner:
         self._c.close()
 
     def run(self, agent_id: str, payload: dict, *, report_id: str | None = None, job_id: str | None = None) -> dict:
+        return self.run_env(agent_id, payload, report_id=report_id, job_id=job_id)["output"]
+
+    def run_env(self, agent_id: str, payload: dict, *, report_id: str | None = None, job_id: str | None = None) -> dict:
+        """Like run(), but returns the whole answer: output plus mode (llm | rules), model, note and token usage."""
         started = time.perf_counter()
         env: dict | None = None
         err: str | None = None
@@ -42,7 +60,7 @@ class AgentsRunner:
         with self._db.session() as s:
             s.add(AgentRun(report_id=report_id, job_id=job_id, agent_id=agent_id, mode=(env or {}).get("mode"), model=(env or {}).get("model"),
                            status="ok" if env else "error", error=err, note=(env or {}).get("note"), duration_ms=(env or {}).get("duration_ms") or ms,
-                           usage=(env or {}).get("usage") or {}, input=payload, output=(env or {}).get("output")))
+                           usage=(env or {}).get("usage") or {}, input=shrink(payload), output=shrink((env or {}).get("output"))))
         if env is None:
             raise AgentCallFailed(agent_id, err or "unknown error", unreachable)
-        return env["output"]
+        return env

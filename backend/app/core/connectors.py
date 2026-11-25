@@ -89,3 +89,30 @@ class WebFetcher:
         if len(r.content) > 3_000_000:
             raise ValueError("page too large")
         return url, r.text
+
+    def fetch_document(self, url: str, max_bytes: int = 25_000_000) -> tuple[str, bytes]:
+        """A cited page or document (HTML, PDF, Office file) as bytes with a file name that tells the reader what it is."""
+        import httpx
+        from urllib.parse import urlparse
+
+        self._check(url)
+        r = httpx.get(url, timeout=max(self.timeout, 30.0), follow_redirects=True, headers={"User-Agent": "COE4-Committee-Assistant/0.1"})
+        r.raise_for_status()
+        self._check(str(r.url))  # a redirect must not lead to an internal address
+        if len(r.content) > max_bytes:
+            raise ValueError("document too large")
+        ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+        name = Path(urlparse(str(r.url)).path).name or "seite"
+        ext = {"application/pdf": ".pdf", "text/html": ".html", "application/xhtml+xml": ".html"}.get(ctype)
+        if ext and not name.lower().endswith(ext):
+            name = (name if "." not in name else name.rsplit(".", 1)[0]) + ext
+        return name, r.content
+
+    def _check(self, url: str) -> None:
+        if not self.allow:
+            raise PermissionError("web access is switched off (ALLOW_WEB=false)")
+        if not re.match(r"^https?://", url):
+            raise ValueError("only http(s) links")
+        host = re.sub(r"^https?://([^/:]+).*", r"\1", url).lower()
+        if host in ("localhost", "127.0.0.1", "::1") or host.endswith((".local", ".internal")) or re.match(r"^(10|192\.168|172\.(1[6-9]|2\d|3[01])|169\.254)\.", host):
+            raise PermissionError("internal addresses are not fetched")

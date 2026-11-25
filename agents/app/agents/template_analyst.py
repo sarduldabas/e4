@@ -34,6 +34,7 @@ class TemplateAnalystInput(BaseModel):
     topic: str = ""
     description: str = ""
     committee: str | None = None
+    decision_requested: str = ""
     template: TemplateInfo | None = None
 
 
@@ -69,8 +70,12 @@ Propose the outline of the report: one entry per content section the template ex
 - "required_inputs": 1-4 concrete pieces of information the user must provide or the sources must contain for the section
   to be written well (for example "cost per option", "milestones with dates"). Tailor them to the topic.
 - "suggested_slides": how many slides the section needs (usually 1).
-If no template is given, propose the standard outline: management summary, background and scope, supplier landscape or
-market, options and cost, risks and mitigations, timeline and milestones, recommendation and next steps.
+If NO template is given, you advise the structure yourself: design the outline of a board-level paper for THIS topic, committee and
+decision requested, not a generic one. Think about what the committee must understand and weigh to decide: the situation and why a
+decision is needed now, the options and how they compare (cost, risk, time, strategic fit), the evidence and market context, the risks and how
+they are mitigated, the financial and timeline consequences, and the recommendation with next steps. Use 6-9 sections, the decision-relevant
+ones first, with concrete "required_inputs" (which figures, comparisons, dates and documents are needed). Do not add the management summary or
+the decision slide as sections: the deck gets both automatically. Say in "notes" in one or two sentences why you structured it this way.
 Section keys: short lowercase ascii slugs, unique."""
 
     def rules(self, inp: TemplateAnalystInput) -> TemplateAnalystOutput:

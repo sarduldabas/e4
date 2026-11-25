@@ -25,7 +25,7 @@ def propose_outline(ctx: Context, rid: str) -> dict:
         r = get_report(s, rid)
         require_state(r, "SETUP", "OUTLINE_REVIEW")
         tpl = s.query(FileRow).filter_by(report_id=rid, role="template").order_by(FileRow.created_at.desc()).first()
-        payload = {"lang": r.lang, "topic": r.topic or r.title, "description": r.description, "committee": r.committee or None}
+        payload = {"lang": r.lang, "topic": r.topic or r.title, "description": r.description, "committee": r.committee or None, "decision_requested": r.decision_requested or ""}
         note = None
         if tpl:
             try:

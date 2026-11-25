@@ -126,21 +126,79 @@ def approve_all(c, base):
     return c.get(f"{base}/jobs/{j.json()['job_id']}").json()
 
 
+def _slide_texts(slide) -> str:
+    out = []
+    for sh in slide.shapes:
+        if sh.has_text_frame:
+            out.append(sh.text_frame.text)
+        if getattr(sh, "has_table", False) and sh.has_table:
+            out += [c.text for r in sh.table.rows for c in r.cells]
+    return "\n".join(out)
+
+
 def test_deck_is_built_from_approved_claims_with_sources_and_native_chart(case):
     c, rid, base = case
     research(c, base)
     assert approve_all(c, base)["status"] == "done"
     d = c.get(f"{base}/deck").json()
-    assert d["has_file"] and all(b["claim_ids"] for s in d["slides"] for b in s["bullets"])
+    kinds = [s["kind"] for s in d["slides"]]
+    assert kinds[0] == "title" and "summary" in kinds and "decision" in kinds and kinds[-1] == "sources"
+    assert d["has_file"] and all(b["claim_ids"] for s in d["slides"] if s["kind"] in ("content", "summary") for b in s["bullets"])
     prs = Presentation(io.BytesIO(c.get(f"{base}/deck/download").content))
+    assert len(prs.slides) == len(d["slides"])
     assert any(getattr(sh, "has_chart", False) and sh.has_chart for s in prs.slides for sh in s.shapes)
     notes = " ".join(s.notes_slide.notes_text_frame.text for s in prs.slides if s.has_notes_slide)
     assert "Belege:" in notes
+    # what the page shows is what the file contains: every title, bullet, key figure and table cell of every slide is in the PowerPoint slide
+    for ui, sl in zip(d["slides"], prs.slides):
+        text = _slide_texts(sl)
+        assert ui["title"] in text
+        for b in ui["spec"]["blocks"]:
+            if b["type"] == "bullets":
+                assert all(i["text"] in text for i in b["items"])
+            elif b["type"] == "kpis":
+                assert all(i["value"] in text and i["label"] in text for i in b["items"])
+            elif b["type"] == "table":
+                assert all(cell in text for row in b["rows"] for cell in row if cell)
     # a user edit with a number that no verified claim contains is warned about
-    sl = d["slides"][0]
+    sl = next(s for s in d["slides"] if s["kind"] == "content")
     w = c.patch(f"{base}/deck/slides/{sl['id']}", json={"bullets": ["Neue Zahl 777"]}).json()
     assert w["warnings"]
     assert c.get(f"{base}/case").json()["state"] == "DECK_REVIEW"
+
+
+def test_slide_edit_undo_add_move_delete_and_the_file_follows(case):
+    c, rid, base = case
+    research(c, base)
+    approve_all(c, base)
+    d = c.get(f"{base}/deck").json()
+    sl = next(s for s in d["slides"] if s["kind"] == "content")
+    original = sl["spec"]["title"]
+    spec = sl["spec"]
+    spec["title"] = "Von Hand geänderter Titel mit klarer Aussage"
+    r = c.patch(f"{base}/deck/slides/{sl['id']}", json={"spec": spec})
+    assert r.status_code == 200 and r.json()["spec"]["title"] == spec["title"]
+    d2 = c.get(f"{base}/deck").json()
+    cur = next(s for s in d2["slides"] if s["id"] == sl["id"])
+    assert cur["user_edited"] and cur["can_undo"]
+    prs = Presentation(io.BytesIO(c.get(f"{base}/deck/download").content))
+    assert any(spec["title"] in _slide_texts(s) for s in prs.slides)
+    u = c.post(f"{base}/deck/slides/{sl['id']}/undo").json()
+    assert u["spec"]["title"] == original
+    # a slide of a generated kind (sources) is locked
+    locked = next(s for s in d["slides"] if s["kind"] == "sources")
+    assert c.patch(f"{base}/deck/slides/{locked['id']}", json={"title": "x"}).status_code == 409
+    n = len(d["slides"])
+    new = c.post(f"{base}/deck/slides", json={"after": sl["id"], "layout": "two-column"}).json()["id"]
+    d3 = c.get(f"{base}/deck").json()
+    assert len(d3["slides"]) == n + 1 and [s["id"] for s in d3["slides"]].index(new) == [s["id"] for s in d3["slides"]].index(sl["id"]) + 1
+    assert c.put(f"{base}/deck/slides/{new}/position", json={"index": 1}).status_code == 204
+    assert [s["id"] for s in c.get(f"{base}/deck").json()["slides"]].index(new) >= 2  # never in front of the title and the summary
+    assert c.delete(f"{base}/deck/slides/{new}").status_code == 204
+    assert len(c.get(f"{base}/deck").json()["slides"]) == n
+    # a comment on a slide goes to the slide-editor; without a language model the slide stays as it is and says so
+    rv = c.post(f"{base}/deck/slides/{sl['id']}/revise", json={"instruction": "Bitte den Titel kürzer fassen"}).json()
+    assert rv["changed"] is False and rv["needs"]
 
 
 def test_feedback_creates_v2_carries_approved_claims_and_lists_changes(case):
@@ -159,22 +217,30 @@ def test_feedback_creates_v2_carries_approved_claims_and_lists_changes(case):
         assert s.get(Report, rid).version_no == 2
 
 
-def test_web_researcher_runs_only_when_web_is_allowed(case):
+def test_a_named_web_page_is_fetched_read_and_extracted_when_web_is_allowed(case):
     c, rid, base = case
     c.app.state.ctx.settings.allow_web = True
 
     class Stub:
         allow = True
 
-        def fetch(self, url):
-            return url, "<html><title>Marktstudie</title><p>Der Weltmarkt für Batteriezellen wächst im Jahr 2026 um 18 % bei den Kosten pro Option.</p></html>"
+        def fetch_document(self, url):
+            return "studie.html", "<html><title>Marktstudie</title><p>Der Weltmarkt für Batteriezellen wächst im Jahr 2026 um 18 % bei den Kosten pro Option.</p></html>".encode()
     c.app.state.ctx.web = Stub()
     c.put(f"{base}/case", json={"links": ["https://example.org/studie"]})
     research(c, base)
     with c.app.state.db.session() as s:
-        assert s.query(AgentRun).filter_by(report_id=rid, agent_id="web-researcher").count() == 1
         web = s.query(Evidence).filter_by(report_id=rid, origin="web").all()
         assert web and "18" in web[0].quote
+        assert web[0].confidence <= 0.7  # a web page never counts as much as the company's own document
+
+
+def test_fetching_a_page_refuses_internal_addresses_after_redirects_too():
+    from app.core.connectors import WebFetcher
+    f = WebFetcher(True)
+    for u in ("http://169.254.169.254/latest", "http://localhost/x"):
+        with pytest.raises(PermissionError):
+            f.fetch_document(u)
 
 
 def test_web_is_blocked_for_internal_addresses_and_when_off():
@@ -227,3 +293,37 @@ def test_deleting_a_report_removes_files_and_audit_trail(case):
     assert not root.exists()
     with c.app.state.db.session() as s:
         assert s.query(AgentRun).filter_by(report_id=rid).count() == 0 and s.query(Evidence).filter_by(report_id=rid).count() == 0
+
+
+def test_upload_reports_reading_quality_at_once_and_sources_carry_it_after_research(case):
+    c, rid, base = case
+    files = c.get(f"{base}/files").json()
+    src = [f for f in files if f["role"] == "source"]
+    assert src and all(f["info"] and f["info"]["status"] in ("ok", "partial", "poor", "pending") and f["info"]["chars"] > 0 for f in src)
+    # a file that cannot be read is accepted but reported as poor (nothing is silently dropped)
+    r = c.post(f"{base}/files", files={"file": ("leer.txt", b"  ")}, data={"role": "source"})
+    assert r.status_code == 201 and r.json()["info"]["status"] == "poor"
+    research(c, base)
+    rows = c.get(f"{base}/sources").json()
+    assert any(s["status"] == "parsed" and s["info"] for s in rows)
+
+
+def test_slide_images_are_served_from_the_report_and_not_from_other_reports(case):
+    c, rid, base = case
+    assert c.get(f"{base}/assets/a-unknown").status_code == 404
+
+
+def test_bar_and_column_charts_start_at_zero_in_the_file(case):
+    c, rid, base = case
+    research(c, base)
+    approve_all(c, base)
+    d = c.get(f"{base}/deck").json()
+    sl = next(s for s in d["slides"] if s["kind"] == "content")
+    spec = sl["spec"]
+    spec["layout"] = "chart-text"
+    spec["blocks"] = [{"slot": "chart", "type": "chart", "chart": {"type": "column", "title": "T", "unit": "EUR", "labels": ["A", "B"], "series": [{"name": "s", "values": [42.5, 39.9]}]}},
+                      {"slot": "bullets", "type": "bullets", "items": ["x"]}]
+    assert c.patch(f"{base}/deck/slides/{sl['id']}", json={"spec": spec}).status_code == 200
+    prs = Presentation(io.BytesIO(c.get(f"{base}/deck/download").content))
+    charts = [sh.chart for s in prs.slides for sh in s.shapes if getattr(sh, "has_chart", False) and sh.has_chart]
+    assert any(ch.value_axis.minimum_scale == 0 for ch in charts)
