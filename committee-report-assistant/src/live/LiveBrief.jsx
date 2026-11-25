@@ -1,9 +1,9 @@
 // Live stage 1: brief, files (with how well each was read), outline, interview. Everything is saved on the server as you go.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, FileText, Globe, ListChecks, Mic, Plus, Send, Sparkles, Trash2, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, FileText, Globe, ListChecks, Mic, Plus, Send, Sparkles, Trash2, Upload, AlertTriangle, CheckCircle2, SlidersHorizontal } from 'lucide-react';
 import { t } from '../i18n.js';
 import { api } from './client.js';
-import { bytes, errText, nf, Spin, useAction, useDebouncedEffect } from './kit.jsx';
+import { bytes, errText, nf, NextBar, Spin, Step, useAction, useDebouncedEffect } from './kit.jsx';
 
 const ROLE_LABEL = { source: 'Source', template: 'Template', prior_report: 'Previous report' };
 
@@ -26,7 +26,7 @@ function FileInfo({ info }) {
   );
 }
 
-function Files({ rid, files, reload, toast }) {
+function Files({ rid, files, reload, toast, children }) {
   const [busy, run] = useAction(toast);
   const [over, setOver] = useState(false);
   const inputs = { source: useRef(null), template: useRef(null), prior_report: useRef(null) };
@@ -38,8 +38,8 @@ function Files({ rid, files, reload, toast }) {
   });
   const del = (f) => run(f.id, async () => { await api.deleteFile(rid, f.id); await reload(); });
   return (
-    <section className="card pad lv-files">
-      <div className="card-head"><h2>{t('Files')}</h2><span className="muted small">{t('PDF, Word, PowerPoint, Excel, e-mails with attachments, images, scans')}</span></div>
+    <div className="lv-files">
+      <p className="muted small lv-ftypes">{t('PDF, Word, PowerPoint, Excel, e-mails with attachments, images, scans')}</p>
       <div className={`drop lv-drop${over ? ' over' : ''}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
         onDrop={(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files, 'source'); }}>
         <Upload size={22} />
@@ -66,7 +66,8 @@ function Files({ rid, files, reload, toast }) {
           ))}
         </ul>
       )}
-    </section>
+      {children}
+    </div>
   );
 }
 
@@ -84,11 +85,8 @@ function Outline({ rid, c, reload, toast }) {
   const list = secs || [];
   const locked = !['SETUP', 'OUTLINE_REVIEW'].includes(c.state);
   return (
-    <section className="card pad lv-outline">
-      <div className="card-head">
-        <h2>{t('Outline')}</h2>
-        <button className="btn sm" disabled={!!busy || locked} onClick={propose}>{busy === 'prop' ? <Spin /> : <Sparkles size={15} />} {list.length ? t('Propose again') : t('Propose outline')}</button>
-      </div>
+    <div className="lv-outline">
+      {list.length > 0 && <div className="lv-row end"><button className="btn quiet sm" disabled={!!busy || locked} onClick={propose}>{busy === 'prop' ? <Spin /> : <Sparkles size={15} />} {t('Propose again')}</button></div>}
       {notes && <div className="lv-note"><Sparkles size={16} /><span>{notes}</span></div>}
       {list.length === 0 ? <p className="muted">{t('The template analyst reads your template (or, without one, suggests a structure that fits the topic and the committee).')}</p> : (
         <ol className="lv-outline-list">
@@ -106,7 +104,7 @@ function Outline({ rid, c, reload, toast }) {
         </ol>
       )}
       {!locked && list.length > 0 && <button className="btn quiet sm" onClick={() => edit((x) => [...x, { key: null, title: t('New section'), purpose: '', included: true, suggested_slides: 1 }])}><Plus size={15} /> {t('Add section')}</button>}
-    </section>
+    </div>
   );
 }
 
@@ -123,8 +121,7 @@ function Interview({ rid, c, toast, hasOutline }) {
   const send = (done = false) => run('turn', async () => { const v = text; setText(''); await api.turn(rid, v, done); await load(); });
   const speak = useSpeech(lang => setText((x) => `${x} ${lang}`.trim()), toast);
   return (
-    <section className="card pad lv-interview">
-      <div className="card-head"><h2>{t('Interview')}</h2><span className="muted small">{t('What only you know: the agent asks, your answers become evidence marked as yours')}</span></div>
+    <div className="lv-interview">
       {!hasOutline ? <p className="muted">{t('Propose the outline first, then the interviewer can ask about the gaps.')}</p> : (
         <>
           <div className="lv-chat" role="log">
@@ -150,7 +147,7 @@ function Interview({ rid, c, toast, hasOutline }) {
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -184,6 +181,18 @@ function Strength({ a }) {
   );
 }
 
+function StrengthChip({ a }) {
+  if (!a) return null;
+  const s = a.strength;
+  return (
+    <details className="lv-chip">
+      <summary><span className={`pill ${s.score >= 70 ? 'good' : s.score >= 40 ? 'info' : 'warn'}`}>{t('Brief strength')} {s.score} %</span></summary>
+      <div className="lv-chip-pop"><strong>{s.label}</strong><p className="muted small">{s.summary}</p>
+        {s.hints?.length > 0 && <ul className="lv-hints">{s.hints.slice(0, 4).map((h, i) => <li key={i}>{h}</li>)}</ul>}</div>
+    </details>
+  );
+}
+
 export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
   const [f, setF] = useState(null);
   const [committees, setCommittees] = useState([]);
@@ -192,10 +201,12 @@ export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
   const [saved, setSaved] = useState(true);
   const [busy, run] = useAction(toast);
   const dirty = useRef(false);
+  const [outlineKey, setOutlineKey] = useState(0);
+  const [interviewOpen, setInterviewOpen] = useState(false);
   const open = ['SETUP', 'OUTLINE_REVIEW'].includes(c.state);
 
   useEffect(() => {
-    setF({ title: c.title || '', topic: c.topic || '', description: c.description || '', decision_requested: c.decision_requested || '', links: (c.links || []).join('\n'), lang: c.lang || lang, use_web: !!c.use_web, committee: c.committee || '' });
+    setF({ title: c.title || '', topic: c.topic || '', description: c.description || '', decision_requested: c.decision_requested || '', links: (c.links || []).join('\n'), lang: c.lang || lang, use_web: c.use_web !== false, committee: c.committee || '' });
     api.committees().then(setCommittees).catch(() => {});
     api.files(rid).then(setFiles).catch(() => {});
   }, [rid]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -219,59 +230,79 @@ export default function LiveBrief({ rid, c, reload, lang, st, toast, go }) {
 
   if (!f) return null;
   const hasOutline = c.state !== 'SETUP';
-  const included = c.counts; // eslint-disable-line no-unused-vars
+  const ready = f.topic.trim().length >= 3;
+  const body = () => {
+    const out = { title: f.title, topic: f.topic, description: f.description, decision_requested: f.decision_requested, lang: f.lang, use_web: f.use_web, links: f.links.split('\n').map((x) => x.trim()).filter(Boolean) };
+    const com = committees.find((x) => x.name === f.committee || x.id === f.committee);
+    if (com) out.committee_id = com.id;
+    return out;
+  };
+  const propose = () => run('prop', async () => { await api.putCase(rid, body()); dirty.current = false; setSaved(true); await api.proposeOutline(rid); setOutlineKey((k) => k + 1); await reload(); });
   const approve = () => run('approve', async () => { await api.approveOutline(rid); await reload(); go('analysis'); });
+  const web = f.use_web && c.web_enabled;
   return (
-    <div className="lv-stage">
+    <div className="lv-stage narrow">
       <div className="stage-head compact">
         <div><p className="eyebrow">{t('Step 1 · Brief')}</p><h1 className="display md">{t('Tell me what you know')}</h1></div>
         <span className="muted small">{saved ? <><CheckCircle2 size={14} /> {t('Saved')}</> : <><Spin size={13} /> {t('Saving…')}</>}</span>
       </div>
       {!open && <div className="lv-banner info"><ListChecks size={20} /><div><strong>{t('The outline is approved')}</strong><span>{t('The brief is locked while the analysis runs or its results are being reviewed. Start a new version from the report step to change it.')}</span></div></div>}
-      <div className="lv-grid">
-        <div className="lv-main">
-          <section className="card pad lv-form">
-            <div className="lv-field"><label>{t('Title')}</label><input className="lv-in" value={f.title} disabled={!open} onChange={set('title')} /></div>
+
+      <Step n={1} title={t('What is this about?')} hint={t('Write it the way you would explain it to a colleague. The more concrete, the better the analysis.')} done={ready} aside={<StrengthChip a={assess} />}>
+        <div className="lv-row">
+          <div className="lv-field grow"><label>{t('Topic')}</label><input className="lv-in" value={f.topic} disabled={!open} placeholder={t('What is this report about?')} onChange={set('topic')} /></div>
+          <div className="lv-field"><label>{t('Committee')}</label>
+            <select className="lv-in" value={committees.find((x) => x.name === f.committee || x.id === f.committee)?.id || ''} disabled={!open} onChange={(e) => { dirty.current = true; setSaved(false); setF((x) => ({ ...x, committee: committees.find((k) => k.id === e.target.value)?.name || '' })); }}>
+              <option value="">—</option>{committees.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}</select></div>
+        </div>
+        <div className="lv-field"><label>{t('What do you know?')}</label>
+          <textarea className="lv-in" rows={7} value={f.description} disabled={!open} onChange={set('description')}
+            placeholder={t('Background, numbers you already have, options, constraints, who decides, what happened before.')} /></div>
+        <div className="lv-field"><label>{t('Decision requested from the committee')}</label>
+          <input className="lv-in" value={f.decision_requested} disabled={!open} placeholder={t('e.g. “Approve the award to supplier A”')} onChange={set('decision_requested')} /></div>
+        <details className="lv-more">
+          <summary><SlidersHorizontal size={14} /> {t('More options')} <span className="muted small">{web ? t('Web research on') : t('Web research off')}</span></summary>
+          <div className="lv-more-body">
             <div className="lv-row">
-              <div className="lv-field grow"><label>{t('Topic')}</label><input className="lv-in" value={f.topic} disabled={!open} placeholder={t('What is this report about?')} onChange={set('topic')} /></div>
-              <div className="lv-field"><label>{t('Committee')}</label>
-                <select className="lv-in" value={committees.find((x) => x.name === f.committee || x.id === f.committee)?.id || ''} disabled={!open} onChange={(e) => { dirty.current = true; setSaved(false); setF((x) => ({ ...x, committee: committees.find((k) => k.id === e.target.value)?.name || '' })); }}>
-                  <option value="">—</option>{committees.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}</select></div>
-              <div className="lv-field"><label>{t('Language')}</label>
+              <div className="lv-field grow"><label>{t('Title')}</label><input className="lv-in" value={f.title} disabled={!open} onChange={set('title')} /></div>
+              <div className="lv-field"><label>{t('Language of the report')}</label>
                 <select className="lv-in" value={f.lang} disabled={!open} onChange={set('lang')}><option value="de">Deutsch</option><option value="en">English</option></select></div>
             </div>
-            <div className="lv-field"><label>{t('What do you know?')}</label>
-              <textarea className="lv-in" rows={9} value={f.description} disabled={!open} onChange={set('description')}
-                placeholder={t('Background, numbers you already have, options, constraints, who decides, what happened before. The more concrete, the better the analysis.')} /></div>
-            <div className="lv-field"><label>{t('Decision requested from the committee')}</label>
-              <input className="lv-in" value={f.decision_requested} disabled={!open} placeholder={t('e.g. “Approve the award to supplier A”')} onChange={set('decision_requested')} /></div>
-            <div className="lv-field"><label>{t('Links')} <span className="muted small">{t('one per line; pages are read and cited')}</span></label>
-              <textarea className="lv-in" rows={3} value={f.links} disabled={!open} onChange={set('links')} placeholder="https://…" /></div>
-            <label className={`lv-web${f.use_web ? ' on' : ''}${c.web_enabled ? '' : ' off'}`}>
-              <input type="checkbox" checked={f.use_web && c.web_enabled} disabled={!open || !c.web_enabled} onChange={set('use_web')} />
+            <label className={`lv-web${web ? ' on' : ''}${c.web_enabled ? '' : ' off'}`}>
+              <input type="checkbox" checked={web} disabled={!open || !c.web_enabled} onChange={set('use_web')} />
               <Globe size={18} />
-              <span><strong>{t('Research on the web')}</strong>
-                <small>{c.web_enabled ? t('The Foundry web search tool looks for market data, benchmarks and news; every page used is listed as a source. No extra credentials.') : t('Web access is switched off on this server (ALLOW_WEB).')}</small></span>
+              <span><strong>{t('Research on the web')} <span className="pill good">{t('recommended')}</span></strong>
+                <small>{c.web_enabled ? t('On for every report: the Foundry web search tool looks for market data, benchmarks and news, and every page used is listed as a source. No extra credentials.') : t('Web access is switched off on this server (ALLOW_WEB).')}</small></span>
             </label>
-          </section>
-          <Files rid={rid} files={files} reload={loadFiles} toast={toast} />
-          <Outline rid={rid} c={c} reload={reload} toast={toast} />
+          </div>
+        </details>
+      </Step>
+
+      <Step n={2} title={t('Add your material')} hint={t('Optional, but this is where the real numbers come from. Each file is read completely; scans and images are read by the vision model.')} done={files.length > 0}>
+        <Files rid={rid} files={files} reload={loadFiles} toast={toast}>
+          <div className="lv-field"><label>{t('Links')} <span className="muted small">{t('one per line; pages are read and cited')}</span></label>
+            <textarea className="lv-in" rows={2} value={f.links} disabled={!open} onChange={set('links')} placeholder="https://…" /></div>
+        </Files>
+      </Step>
+
+      {hasOutline && (
+        <Step n={3} title={t('Outline')} hint={t('Check the structure of the report. Rename, reorder or switch off sections; changes are saved as you type.')} done={c.state !== 'OUTLINE_REVIEW'}>
+          <Outline key={outlineKey} rid={rid} c={c} reload={reload} toast={toast} />
+        </Step>
+      )}
+
+      {hasOutline && (
+        <details className="card lv-opt" open={interviewOpen} onToggle={(e) => setInterviewOpen(e.currentTarget.open)}>
+          <summary><ChevronRight size={16} className="lv-opt-chev" /> <strong>{t('Add what only you know')}</strong> <span className="muted small">{t('optional · the agent asks, your answers count as your own evidence')}</span></summary>
           <Interview rid={rid} c={c} toast={toast} hasOutline={hasOutline} />
-        </div>
-        <aside className="lv-side">
-          <section className="card pad"><h2>{t('Brief strength')}</h2>
-            {assess ? <Strength a={assess} /> : <p className="muted small">{st?.agents === 'up' ? <><Spin size={13} /> {t('Assessing…')}</> : t('Needs the agents service.')}</p>}</section>
-          <section className="card pad lv-go">
-            <h2>{t('Next')}</h2>
-            <p className="muted small">{t('Approving the outline starts the research: your files are read page by page, the web is searched, and every finding is checked against its source.')}</p>
-            <div className="lv-facts"><span><b>{files.length}</b> {t('files')}</span><span><b>{c.counts.sources}</b> {t('sources')}</span><span><b>{c.counts.evidence}</b> {t('evidence items')}</span></div>
-            {open ? <button className="btn primary lg" disabled={!!busy || !hasOutline} onClick={approve}>{busy === 'approve' ? <Spin /> : <Sparkles size={17} />} {t('Approve outline and start analysis')}</button>
-              : <button className="btn lg" onClick={() => go('analysis')}>{t('To the analysis')}</button>}
-            {!hasOutline && open && <p className="muted small"><AlertTriangle size={13} /> {t('Propose and check the outline first.')}</p>}
-          </section>
-        </aside>
-      </div>
+        </details>
+      )}
+
+      <NextBar status={!ready ? t('Start with the topic.') : !hasOutline ? t('Next: I draft an outline from your brief and files.') : open ? t('{a} files · the analysis starts when you approve.', { a: files.length }) : t('The outline is approved.')}>
+        {!hasOutline && <button className="btn primary lg" disabled={!!busy || !ready} onClick={propose}>{busy === 'prop' ? <Spin /> : <Sparkles size={17} />} {t('Create outline')}</button>}
+        {hasOutline && open && <button className="btn primary lg" disabled={!!busy} onClick={approve}>{busy === 'approve' ? <Spin /> : <Sparkles size={17} />} {t('Approve outline and start analysis')}</button>}
+        {hasOutline && !open && <button className="btn lg" onClick={() => go('analysis')}>{t('To the analysis')}</button>}
+      </NextBar>
     </div>
   );
 }
-

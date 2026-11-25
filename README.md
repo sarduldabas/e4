@@ -16,7 +16,7 @@ Three services. The front end only talks to the backend; the backend is the only
 |---|---|---|---|
 | `committee-report-assistant/` | Front end (React 18 + Vite) | 5173 (dev) / 8080 (Docker) | The three stages: Brief, Analysis, Report. **Demo** mode (built-in sample data) and **Live** mode (the real backend and agents, plus the Agent log tab) |
 | `backend/` | FastAPI | 8001 | Controls the front end: API, committees and reports storage, calls the agents, hides agent failures from the UI |
-| `agents/` | FastAPI | 8002 | The **17 agents** (Brief, reading, research, analysis, slides; stateless, JSON in / JSON out). Each runs on your model (Foundry) or on a built-in rules version |
+| `agents/` | FastAPI | 8002 | The **18 agents** (Brief, reading, research, analysis, slides; stateless, JSON in / JSON out). Each runs on your model (Foundry) or on a built-in rules version |
 
 The **orchestrator** (plain Python state machine and job runner) lives in the backend. Agents never call each other; the orchestrator
 calls them in order, keeps all state in the **case workspace** (database + files, see `backend/README.md`) and enforces the three
@@ -39,7 +39,7 @@ cd agents  && pip install -r requirements.txt && uvicorn app.main:app --port 800
 cd backend && pip install -r requirements.txt && uvicorn app.main:app --port 8001 --reload
 cd committee-report-assistant && npm install && npm run dev
 ```
-Tests: `pip install -r requirements-dev.txt && pytest` inside `agents/` (56 tests) or `backend/` (48 tests); the backend tests start the agents service themselves.
+Tests: `pip install -r requirements-dev.txt && pytest` inside `agents/` (64 tests) or `backend/` (55 tests); the backend tests start the agents service themselves.
 
 ## What is connected today
 
@@ -60,7 +60,9 @@ Stages 2 and 3 (Analysis, Report) run in the backend and, in **Live** mode, the 
   report (read completely / in part / hardly readable, with warnings) that the page shows.
 - **Exhaustive analysis**: all text of all sources is processed in blocks (parallel), evidence is extracted with verbatim quotes and locators, and the section analyst also
   reads the raw passages that matter for its section (retrieval) and may add evidence of its own that is checked against the passage text.
-- **Web research** (switch per report, `ALLOW_WEB=true`): Foundry's own web search tool, no Bing key, no extra credentials. Every page used is listed as a source.
+- **Web research is on for every report** (the author can switch it off under “More options”; `ALLOW_WEB=false` stops fetching cited pages): Foundry's own web search tool, no Bing key, no extra credentials. Every page used is listed as a source. The planner always plans external context (market, benchmarks, regulation) next to the internal sources, and a guard rail adds it if the model forgets.
+- **Research is planned per topic, not from a fixed list.** The author's own material is read first; the research planner then sees what it covers and decides where to look (web, SharePoint, mail, Teams, SAP, Jira, Confluence: whatever the source catalogue in `backend/app/core/connectors.py` offers). After extraction it runs again in `gaps` mode for the sections that are still thin (`GAP_ROUNDS`, default 1). Every round, its reasoning and what it found are shown in the Research plan tab. A new connector needs a catalogue entry and a class with `available()`, `search()`, `fetch()`.
+- **Asset library.** Pictures are cut out of PDF pages at figure size with their caption (embedded bitmaps and vector charts), taken from Word, PowerPoint, mails and cited web pages; PowerPoint charts keep their exact numbers. The vision model looks at each picture (what it is, usable or not, crop box, chart data); chart numbers become evidence, so the chart is redrawn natively from verified numbers. The curator chooses from the whole catalogue; “Use” / “Skip” of the author always wins. Web pictures are marked “check rights”.
 - **Slides**: one JSON per slide (`layout`, `blocks`, text sizes fitted on the server). The page and the PowerPoint file are drawn from the same JSON, so they match
   (a test checks every title, bullet, key figure and table cell). Charts are native PowerPoint charts. Numbers on a slide must come from the evidence or a calculation.
   Edit text right on the slide, or write a comment per slide for the slide editor (undo is kept); add, move, delete slides; download = what you see.

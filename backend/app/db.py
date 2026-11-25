@@ -32,6 +32,7 @@ class Database:
         from . import models  # noqa: F401  (registers the tables)
         Base.metadata.create_all(self.engine)
         self._add_missing_columns()
+        self._data_fixes()
 
     def _add_missing_columns(self) -> None:
         """A database made by an earlier version lacks the columns added since. Adding a nullable column is safe, so do it here."""
@@ -47,6 +48,18 @@ class Database:
                     if col.name not in have and not col.primary_key:
                         ddl = col.type.compile(self.engine.dialect)
                         conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
+
+    def _data_fixes(self) -> None:
+        """One-time corrections of data written by earlier versions (SQLite keeps the step in PRAGMA user_version)."""
+        from sqlalchemy import text
+
+        if not str(self.engine.url).startswith("sqlite"):
+            return
+        with self.engine.begin() as conn:
+            v = conn.execute(text("PRAGMA user_version")).scalar() or 0
+            if v < 1:  # web research is on for every report from now on
+                conn.execute(text("UPDATE reports SET use_web = 1 WHERE use_web IS NULL OR use_web = 0"))
+                conn.execute(text("PRAGMA user_version = 1"))
 
     @contextmanager
     def session(self):

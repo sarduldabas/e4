@@ -1,6 +1,7 @@
 """All agents of the solution, by id."""
 from __future__ import annotations
 
+from .asset_analyst import AssetAnalyst
 from .asset_curator import AssetCurator
 from .brief import Brief
 from .core import BaseAgent
@@ -22,7 +23,7 @@ from .web_search import WebSearch
 
 AGENT_CLASSES: list[type[BaseAgent]] = [
     Brief, TemplateAnalyst, DocumentReader, Interviewer, SourcePlanner, SourceScreener, WebSearch, WebResearcher, EvidenceExtractor,
-    AssetCurator, SectionAnalyst, Verifier, RedTeam, StorylineArchitect, SlideWriter, SlideEditor, FeedbackInterpreter,
+    AssetAnalyst, AssetCurator, SectionAnalyst, Verifier, RedTeam, StorylineArchitect, SlideWriter, SlideEditor, FeedbackInterpreter,
 ]
 
 

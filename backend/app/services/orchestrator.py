@@ -35,7 +35,7 @@ class Orchestrator:
                 "slides": s.query(Slide).filter_by(report_id=rid, version_no=ver).count(),
             }
             return {"id": r.id, "title": r.title, "topic": r.topic, "description": r.description, "decision_requested": r.decision_requested, "lang": r.lang, "links": r.links or [],
-                    "use_web": bool(r.use_web), "web_enabled": self.ctx.settings.allow_web, "committee": r.committee, "date": r.date, "version": r.version, "version_no": ver, "state": r.state, "stage": r.stage, "counts": counts,
+                    "use_web": r.use_web is not False, "web_enabled": self.ctx.settings.allow_web, "committee": r.committee, "date": r.date, "version": r.version, "version_no": ver, "state": r.state, "stage": r.stage, "counts": counts,
                     "open_blockers": len(blockers), "deck": {"version": deck.version_no, "slides": deck.slide_count, "changes": deck.changes} if deck else None,
                     "job": self._job_view(job) if job else None}
 
@@ -345,6 +345,25 @@ class Orchestrator:
             get_report(s, rid)
             return [{"kind": e.kind, "payload": e.payload, "at": e.created_at.isoformat()} for e in s.query(Event).filter_by(report_id=rid).order_by(Event.created_at, Event.id).all()]
 
+    def research_plan(self, rid: str) -> dict:
+        """What the research planner decided per round (strategy, needs, queries) and what each round found; web problems as notes."""
+        with self.ctx.db.session() as s:
+            get_report(s, rid)
+            rows = s.query(Event).filter(Event.report_id == rid, Event.kind.in_(["research_plan", "web_search_note"])).order_by(Event.created_at, Event.id).all()
+            return {"rounds": [e.payload for e in rows if e.kind == "research_plan"], "web_notes": [e.payload.get("note") for e in rows if e.kind == "web_search_note"][-3:]}
+
+    def asset_library(self, rid: str) -> list[dict]:
+        from . import assets as assets_svc
+        with self.ctx.db.session() as s:
+            get_report(s, rid)
+        return assets_svc.library(self.ctx, rid)
+
+    def patch_asset(self, rid: str, aid: str, data: dict) -> dict:
+        from . import assets as assets_svc
+        with self.ctx.db.session() as s:
+            get_report(s, rid)
+        return assets_svc.patch(self.ctx, rid, aid, data)
+
     def asset_bytes(self, rid: str, asset_id: str) -> tuple[bytes, str]:
         with self.ctx.db.session() as s:
             get_report(s, rid)
@@ -352,7 +371,7 @@ class Orchestrator:
             if not a or a.report_id != rid or not a.key:
                 raise NotFound(asset_id)
             data = self.ctx.store.get(a.key)
-        mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg" if data[:3] == b"\xff\xd8\xff" else "image/gif" if data[:3] == b"GIF" else "application/octet-stream"
+        mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg" if data[:3] == b"\xff\xd8\xff" else "image/gif" if data[:3] == b"GIF" else "image/webp" if data[8:12] == b"WEBP" else "application/octet-stream"
         return data, mime
 
     def agent_runs(self, rid: str, with_io: bool = False) -> list[dict]:

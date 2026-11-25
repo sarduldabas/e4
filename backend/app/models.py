@@ -53,7 +53,7 @@ class Report(Base):
     decision_requested: Mapped[str | None] = mapped_column(Text, nullable=True)
     people: Mapped[list] = mapped_column(JSON, default=list)
     links: Mapped[list] = mapped_column(JSON, default=list)  # public web links named in the brief
-    use_web: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)  # the author allows searching the public web for this report
+    use_web: Mapped[bool | None] = mapped_column(Boolean, default=True, nullable=True)  # web research is on for every report; the author may switch it off
     workspace: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # the front end's own autosaved state
     parent_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     edited_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
@@ -198,7 +198,7 @@ class Asset(Base):
     id: Mapped[str] = _id("a")
     report_id: Mapped[str] = mapped_column(ForeignKey("reports.id", ondelete="CASCADE"), index=True)
     source_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    kind: Mapped[str] = mapped_column(String(8))  # image | table
+    kind: Mapped[str] = mapped_column(String(8))  # image | table | chart
     caption: Mapped[str] = mapped_column(String(300), default="")
     key: Mapped[str | None] = mapped_column(String(400), nullable=True)  # image file in the store
     table: Mapped[list | None] = mapped_column(JSON, nullable=True)  # rows, for tables
@@ -208,6 +208,20 @@ class Asset(Base):
     section_key: Mapped[str | None] = mapped_column(String(60), nullable=True)
     score: Mapped[float] = mapped_column(Float, default=0.0)
     chosen: Mapped[bool] = mapped_column(Boolean, default=False)
+    # asset library (filled when the picture is looked at by the asset-analyst)
+    origin: Mapped[str | None] = mapped_column(String(12), nullable=True)  # document | web | crop
+    locator: Mapped[str | None] = mapped_column(String(200), nullable=True)  # page / slide / picture number in the source
+    parent_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # the picture this one was cropped from
+    role: Mapped[str | None] = mapped_column(String(16), nullable=True)  # chart | diagram | photo | screenshot | table_image | scan | logo | decorative | other
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legibility: Mapped[float | None] = mapped_column(Float, nullable=True)
+    treatment: Mapped[str | None] = mapped_column(String(10), nullable=True)  # use | redraw | discard (the analyst's advice)
+    chart: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # data read from a chart: type, title, unit, labels, series
+    section_hints: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    analysed: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    user_choice: Mapped[str | None] = mapped_column(String(6), nullable=True)  # use | skip: what the user decided, wins over the curator
+    sha: Mapped[str | None] = mapped_column(String(40), nullable=True)  # content hash, so the same picture is stored once
+    rights: Mapped[str | None] = mapped_column(String(200), nullable=True)  # origin note for web pictures (check the right to use before publishing)
 
 
 class Flag(Base):

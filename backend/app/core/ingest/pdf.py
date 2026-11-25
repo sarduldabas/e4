@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import time
 
+from .figures import pdf_figures
 from .model import Chunk, Image, Options, Parsed, Table, VisionTask
 from .text import clean, cell, drop_repeated_lines, garbled_ratio, rows_to_text, split
 
@@ -24,7 +25,7 @@ def _image_coverage(page) -> float:
         w, h = page.get_size()
         area = 0.0
         for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=2):
-            l, b, r, t = obj.get_pos()
+            l, b, r, t = obj.get_bounds()
             area += max(0.0, r - l) * max(0.0, t - b)
         return min(1.0, area / (w * h)) if w and h else 0.0
     except Exception:  # noqa: BLE001
@@ -82,6 +83,7 @@ def read_pdf(data: bytes, opts: Options | None = None) -> Parsed:
     if skipped_need:
         p.warnings.append(f"pages without readable text were not sent to the vision model (limit {opts.max_vision_pages}): {_ranges(skipped_need)}")
     keys: dict[int, str] = {}
+    page_images: dict[int, tuple | None] = {}
     for i in chosen:
         page = doc[i]
         try:
@@ -97,8 +99,7 @@ def read_pdf(data: bytes, opts: Options | None = None) -> Parsed:
         key = f"p{i + 1}"
         keys[i] = key
         p.vision.append(VisionTask(key, f"S. {i + 1}", jpg, reason, hint=meta.get("title", ""), existing_text=pages[i][:1500]))
-        if reason == "figure" and len(jpg) > 20_000:
-            p.images.append(Image(jpg, "jpg", pil.width, pil.height, "", f"S. {i + 1}"))
+        page_images[i] = (jpg, pil.width, pil.height) if reason == "figure" and len(jpg) > 20_000 else None
 
     for i, t in enumerate(pages):
         reason = flags[i][0]
@@ -115,6 +116,17 @@ def read_pdf(data: bytes, opts: Options | None = None) -> Parsed:
     if unread:
         p.warnings.append(f"no text on pages {_ranges(unread)} (scanned) and no vision model was used")
 
+    try:  # the figures themselves, cut out of their pages; a figure page without a found figure keeps its whole-page picture
+        figs = pdf_figures(doc, pages, opts)
+    except Exception as e:  # noqa: BLE001
+        figs = []
+        p.warnings.append(f"figures could not be cut out ({e.__class__.__name__})")
+    p.images += figs
+    have = {im.locator for im in figs}
+    for i, v in page_images.items():
+        if v and f"S. {i + 1}" not in have:
+            p.images.append(Image(v[0], "jpg", v[1], v[2], "", f"S. {i + 1}"))
+    p.stats["figures"] = len(p.images)
     _tables(data, pages, p, opts)
     first = next((t for t in pages if t), "")
     p.title = str(meta.get("title") or (first.splitlines()[0][:100] if first else ""))

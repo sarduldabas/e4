@@ -98,7 +98,7 @@ Invoke-RestMethod http://localhost:8001/health        # status ok
 Invoke-RestMethod http://localhost:8002/v1/agents | Select-Object id, mode
 ```
 
-Expected: 17 agents listed (the Brief agent and 16 pipeline agents) and every `mode` is `rules`, because no model is configured yet. (`/health` also lists them under `agents_available`.)
+Expected: 18 agents listed (the Brief agent and 17 pipeline agents) and every `mode` is `rules`, because no model is configured yet. (`/health` also lists them under `agents_available`.)
 Open http://localhost:5173 : the app starts in German; the Brief stage loads. The API docs are at http://localhost:8001/docs and http://localhost:8002/docs.
 
 Run the tests (about 1 minute). `-m pytest` needs the dev packages first:
@@ -133,7 +133,7 @@ fails on a package (read the error; do not pin random versions), a window closes
 
 ## Task 2: Connect the agents to the Foundry model
 
-Goal: the 17 agents answer with the real model (`mode: llm`) instead of the rules, signing in with the user's Azure account
+Goal: the 18 agents answer with the real model (`mode: llm`) instead of the rules, signing in with the user's Azure account
 the way the colleague's chat app does. Task 1 must be finished first.
 
 ### 2.1 Ask the user for these values (do not guess)
@@ -245,7 +245,7 @@ The complete instructions are in **`committee-report-assistant/VW_BRANDING.md`**
 
 1. The front end has two modes: **Demo** (built-in sample data) and **Live** (the real backend, see `README.md`). Live was tested only with the agents in rules mode; run it against the real model (Task 2) and fix what the model changes (prompts are in `agents/app/agents/*.py`).
 2. Speech input uses the browser's speech recognition, which sends audio to Google. Replace with Azure Speech inside the VW tenant before real data is used.
-3. Web research is off by default (`ALLOW_WEB=false`). It uses Foundry's web search tool and has only been tested with a stub; check on a real model that pages and quotes come back.
+3. Web research is on by default for every report. It uses Foundry's web search tool and has only been tested with a stub; check on a real model that briefings, cited pages and their pictures come back. Also check the research planner (Research plan tab) and the asset analyst (Pictures and charts tab) on real documents.
 4. No login and no user roles. SQLite instead of PostgreSQL; local folders instead of SharePoint, Exchange, Teams and SAP connectors; threads instead of a queue. The move to Foundry hosting comes after the local checks.
 5. German wording needs a review by a native speaker.
 

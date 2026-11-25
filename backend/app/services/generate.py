@@ -5,6 +5,7 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core.slides import normalise, numbers_not_in, scrub
+from . import assets as assets_svc
 from ..models import Asset, Calculation, Claim, Deck, Flag, SectionDraft, Slide
 from .ctx import Context, claim_payload, current_claims, draft_of, get_report, log_event, outline, set_state
 from .jobs import Progress
@@ -39,7 +40,7 @@ def run_generate(ctx: Context, rid: str, prog: Progress, only: list[str] | None 
             if not claims:
                 continue
             d = drafts[o.key]
-            assets = s.query(Asset).filter_by(report_id=rid, section_key=o.key, chosen=True).all()
+            assets = assets_svc.slide_assets(s, rid, o.key)
             prev = [x.spec for x in s.query(Slide).filter_by(report_id=rid, version_no=ver, section_key=o.key).order_by(Slide.position).all() if x.spec]
             work.append({"key": o.key, "title": o.title, "claims": claims, "numbers": section_numbers(claims, led.ev, led.calcs, lang),
                          "allowed": allowed_numbers(claims, led.ev, led.calcs),

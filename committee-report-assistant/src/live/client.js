@@ -55,6 +55,9 @@ export const api = {
   upload: (rid, file, role = 'source') => { const f = new FormData(); f.append('file', file); f.append('role', role); return call('POST', `${R(rid)}/files`, { form: f }); },
   deleteFile: (rid, fid) => del(`${R(rid)}/files/${fid}`),
   sources: (rid) => get(`${R(rid)}/sources`),
+  researchPlan: (rid) => get(`${R(rid)}/research-plan`),
+  assets: (rid) => get(`${R(rid)}/assets`),
+  patchAsset: (rid, id, body) => patch(`${R(rid)}/assets/${id}`, body),
   // checkpoint 1
   proposeOutline: (rid) => post(`${R(rid)}/outline/propose`),
   outline: (rid) => get(`${R(rid)}/outline`),

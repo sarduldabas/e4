@@ -10,7 +10,7 @@ pytest        # after: pip install -r requirements-dev.txt
 
 ## Endpoints
 - `GET /health`, `GET /health/llm` (calls the model once: checks endpoint, deployment and credentials)
-- `GET /v1/agents`: the 17 agents and the mode each runs in
+- `GET /v1/agents`: the 18 agents and the mode each runs in
 - `POST /v1/agents/{id}/run`: JSON in, JSON out, the same envelope for every pipeline agent: `{agent, version, mode, model, note, usage, duration_ms, output}`
 - `GET /v1/agents/{id}/schema`: input and output JSON Schema of an agent
 - `POST /v1/brief/assess`: the Brief agent (front end, via the backend)
@@ -22,12 +22,13 @@ pytest        # after: pip install -r requirements-dev.txt
 | `template-analyst` | strong | template structure -> outline with the inputs each section needs; without a template it advises a structure |
 | `document-reader` | vision | reads pages that code cannot read (scans, images, figures): text, tables, figure facts; marks what is unreadable |
 | `interviewer` | strong | captures what the user says, judges coverage, asks the next question, stops when covered / user done / 12 questions |
-| `source-planner` | standard | which sources to search, with which terms, per section |
+| `source-planner` | strong | the research planner: what the uploaded material already covers, what is missing, and which source (web, SharePoint, mail, Teams, SAP, Jira, Confluence) answers it, with which terms; runs again in `gaps` mode after the first reading |
 | `source-screener` | small | relevance, duplicates and old versions among the hits |
 | `web-search` | standard | Foundry web search tool: finds pages and facts for a query (no Bing key, no extra credentials); every page becomes a source |
 | `web-researcher` | standard | findings from fetched public pages (each with a quote that must occur in the page) |
 | `evidence-extractor` | standard | facts, figures, risks from one document; each with a verbatim quote and locator, checked mechanically |
-| `asset-curator` | vision | which images and tables belong on which slide |
+| `asset-analyst` | vision | looks at each picture: kind, usability, crop box of the real figure, and for charts the data to redraw them natively |
+| `asset-curator` | standard | chooses, from the whole catalogue of pictures, charts and tables, what belongs on which slide |
 | `section-analyst` | strong | `plan`: which calculations; `write`: claims tied to evidence and calculation ids; reads raw source passages and may add verified evidence |
 | `verifier` | strong | checks every claim against its evidence; a wrong number is a blocker whatever the model says |
 | `red-team` | strong | sceptical reading of the whole draft: hard questions, gaps, inconsistencies |

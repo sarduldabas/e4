@@ -37,9 +37,9 @@ class Scripted:
 
 def test_registry_has_the_pipeline_agents_with_unique_ids():
     reg = build_registry()
-    assert len(reg) == 17 and set(reg) == {
+    assert len(reg) == 18 and set(reg) == {
         "brief", "template-analyst", "interviewer", "source-planner", "source-screener", "web-researcher", "evidence-extractor",
-        "asset-curator", "section-analyst", "verifier", "red-team", "slide-writer", "feedback-interpreter", "document-reader", "web-search", "storyline-architect", "slide-editor"}
+        "asset-curator", "section-analyst", "verifier", "red-team", "slide-writer", "feedback-interpreter", "document-reader", "web-search", "storyline-architect", "slide-editor", "asset-analyst"}
     for a in reg.values():
         assert "JSON Schema" in a.system_prompt() and a.id in a.info()["endpoint"]
 
@@ -190,7 +190,7 @@ def test_http_envelope_and_validation():
     client = TestClient(create_app(Settings(agent_mode="rules")))
     agents = client.get("/v1/agents").json()
     assert {a["id"] for a in agents if a["status"] == "available"} >= {"brief", "verifier", "red-team", "feedback-interpreter"}
-    assert len(agents) == 17 and sum(a["id"] == "brief" for a in agents) == 1
+    assert len(agents) == 18 and sum(a["id"] == "brief" for a in agents) == 1
     r = client.post("/v1/agents/template-analyst/run", json={"lang": "en", "topic": "x"})
     body = r.json()
     assert r.status_code == 200 and body["mode"] == "rules" and len(body["output"]["sections"]) == 7
@@ -217,3 +217,93 @@ def test_endpoint_is_built_from_resource_and_project_names(monkeypatch):
     assert config._endpoint_from_env() == "https://vw-res.services.ai.azure.com/api/projects/coe4"
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.openai.azure.com/openai/v1")
     assert config._endpoint_from_env() == "https://x.openai.azure.com"
+
+
+# ----------------------------------------------------------------------------- research planner
+from app.agents.source_planner import Coverage, PlanSection, SourcePlanner, SourcePlannerInput, SourcePlannerOutput, SourceQuery  # noqa: E402
+from app.agents.asset_analyst import AssetAnalyst, AssetAnalystInput, AssetRead, AssetAnalystOutput, AnalystAsset, AnalystSection as AssetSection, ChartData, ChartSeries, CropBox  # noqa: E402
+
+
+def _planner_input(**kw):
+    secs = [PlanSection(key="kosten", title="Kosten", purpose="Was kostet es", required_inputs=["Gesamtkosten", "Kosten pro Fahrzeug"]),
+            PlanSection(key="risiken", title="Risiken", purpose="Welche Risiken")]
+    return SourcePlannerInput(topic="Datenaufbereitung Flotte", sections=secs, available_kinds=["files", "jira", "confluence"], **kw)
+
+
+def test_planner_plans_web_and_every_connector_by_default_without_a_model():
+    out = SourcePlanner().rules(_planner_input())
+    kinds = {q.kind for q in out.queries}
+    assert {"web", "jira", "confluence", "files"} <= kinds
+    assert any(q.kind == "web" and len(q.section_keys) == 2 for q in out.queries)  # topic-wide external context
+    assert out.strategy and len(out.needs) == 2
+
+
+def test_planner_keeps_web_even_if_the_model_forgets_it():
+    a = SourcePlanner()
+    inp = _planner_input()
+    model_answer = SourcePlannerOutput(queries=[SourceQuery(id="x", kind="jira", query="blocked tickets", section_keys=["kosten"])])
+    out = a.clean(inp, model_answer)
+    assert any(q.kind == "web" for q in out.queries)
+    assert {k for q in out.queries for k in q.section_keys} >= {"kosten", "risiken"}  # every section is served
+
+
+def test_planner_without_web_never_plans_web():
+    a = SourcePlanner()
+    inp = _planner_input(allow_web=False)
+    assert all(q.kind != "web" for q in a.rules(inp).queries)
+    out = a.clean(inp, SourcePlannerOutput(queries=[SourceQuery(id="1", kind="web", query="markt", section_keys=["kosten"])]))
+    assert not any(q.kind == "web" for q in out.queries)
+
+
+def test_gap_round_only_searches_thin_sections_and_never_repeats():
+    a = SourcePlanner()
+    cov = [Coverage(section_key="kosten", evidence=12, numbers=5, internal=8, external=4), Coverage(section_key="risiken", evidence=1, internal=1, missing=["Lieferantenrisiko"])]
+    first = a.rules(_planner_input(mode="gaps", coverage=cov))
+    assert first.queries and all(q.section_keys == ["risiken"] for q in first.queries)
+    again = a.rules(_planner_input(mode="gaps", coverage=cov, previous_queries=[q.query for q in first.queries]))
+    assert not again.queries and again.enough
+    full = [Coverage(section_key=k, evidence=9, numbers=3, internal=5, external=4) for k in ("kosten", "risiken")]
+    assert a.rules(_planner_input(mode="gaps", coverage=full)).enough
+
+
+def test_planner_drops_unknown_kinds_and_repeated_queries():
+    a = SourcePlanner()
+    inp = _planner_input(previous_queries=["alt"])
+    out = a.clean(inp, SourcePlannerOutput(queries=[SourceQuery(id="1", kind="sap", query="kosten", section_keys=["kosten"]), SourceQuery(id="2", kind="jira", query="alt", section_keys=["kosten"]),
+                                                  SourceQuery(id="3", kind="jira", query="Epic Datenaufbereitung", section_keys=["zzz"])]))
+    assert all(q.kind != "sap" and q.query != "alt" for q in out.queries)
+    assert next(q for q in out.queries if q.kind == "jira").section_keys == ["kosten", "risiken"]  # unknown key -> whole report
+
+
+# ----------------------------------------------------------------------------- asset analyst
+def test_asset_analyst_cleans_crop_chart_and_treatment():
+    a = AssetAnalyst()
+    inp = AssetAnalystInput(sections=[AssetSection(key="kosten", title="Kosten")], assets=[AnalystAsset(id="a1"), AnalystAsset(id="a2"), AnalystAsset(id="a3"), AnalystAsset(id="a4")])
+    out = a.clean(inp, AssetAnalystOutput(assets=[
+        AssetRead(id="a1", role="chart", treatment="redraw", crop=CropBox(x0=0.1, y0=0.2, x1=0.9, y1=0.7), section_keys=["kosten", "unbekannt"],
+                  chart=ChartData(labels=["2024", "2025", "2026"], series=[ChartSeries(name="Kosten", values=[1.0, 2.0])])),
+        AssetRead(id="a2", role="chart", treatment="redraw", chart=ChartData(labels=["A"], series=[ChartSeries(values=[1.0])]), crop=CropBox(x0=0, y0=0, x1=1, y1=1)),
+        AssetRead(id="a3", role="logo", treatment="use"),
+        AssetRead(id="zzz", role="photo")]))
+    by = {r.id: r for r in out.assets}
+    assert set(by) == {"a1", "a2", "a3", "a4"}  # unknown id dropped, skipped picture kept
+    assert by["a1"].treatment == "redraw" and by["a1"].crop and by["a1"].section_keys == ["kosten"]
+    assert by["a1"].chart.series[0].values == [1.0, 2.0, None]  # padded to the number of labels
+    assert by["a2"].chart is None and by["a2"].treatment == "use" and by["a2"].crop is None  # one label is no chart; full-size crop is no crop
+    assert by["a3"].treatment == "discard"  # logos are never used
+
+
+def test_asset_analyst_without_a_vision_model_discards_only_tiny_pictures():
+    out = AssetAnalyst().rules(AssetAnalystInput(assets=[AnalystAsset(id="a1", width=200, height=100), AnalystAsset(id="a2", width=900, height=500, caption="Kostenentwicklung")]))
+    assert out.assets[0].treatment == "discard" and out.assets[1].treatment == "use"
+
+
+def test_curator_uses_the_analysts_judgement():
+    from app.agents.asset_curator import AssetCandidate, AssetCurator, AssetCuratorInput
+
+    inp = AssetCuratorInput(topic="Kosten", sections=[PlanSection(key="kosten", title="Kosten Entwicklung")], candidates=[
+        AssetCandidate(id="ok", kind="image", caption="Kostenentwicklung", description="Säulendiagramm der Kostenentwicklung", role="chart", width=800, treatment="redraw", has_data=True, section_hints=["kosten"]),
+        AssetCandidate(id="logo", kind="image", caption="Kosten Logo", role="logo", width=800),
+        AssetCandidate(id="no", kind="image", caption="Kostenentwicklung", treatment="discard", width=800)])
+    out = AssetCurator().rules(inp)
+    assert [c.asset_id for c in out.chosen] == ["ok"] and set(out.rejected) == {"logo", "no"}

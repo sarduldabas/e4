@@ -211,6 +211,27 @@ def delete_slide(rid: str, slide_id: str, request: Request):
     orch(request).delete_slide(rid, slide_id)
 
 
+@router.get("/research-plan", summary="The research planner's decisions per round and what each round found")
+def research_plan(rid: str, request: Request):
+    return orch(request).research_plan(rid)
+
+
+@router.get("/assets", summary="The asset library: all pictures, charts and tables found in the sources, with the analyst's description and the curator's choice")
+def assets(rid: str, request: Request):
+    return orch(request).asset_library(rid)
+
+
+class AssetPatch(BaseModel):
+    user_choice: str | None = None
+    section_key: str | None = None
+    caption: str | None = None
+
+
+@router.patch("/assets/{asset_id}", summary="Use this asset (user_choice=use), never use it (skip), or hand the decision back to the curator (null)")
+def patch_asset(rid: str, asset_id: str, body: AssetPatch, request: Request):
+    return orch(request).patch_asset(rid, asset_id, body.model_dump(exclude_unset=True))
+
+
 @router.get("/assets/{asset_id}", summary="An image of the report (used by slides)")
 def asset(rid: str, asset_id: str, request: Request):
     data, mime = orch(request).asset_bytes(rid, asset_id)

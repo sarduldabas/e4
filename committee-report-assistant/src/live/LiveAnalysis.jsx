@@ -1,14 +1,14 @@
 // Live stage 2: watch the research, then check what was found (claims, evidence, flags) and what was read (sources and their quality).
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertOctagon, AlertTriangle, BadgeCheck, Calculator, Check, ChevronRight, ExternalLink, FileText, Globe, Pencil, RefreshCw, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, BadgeCheck, BarChart3, Calculator, Check, ChevronRight, ExternalLink, FileText, Globe, ImageIcon, Pencil, RefreshCw, Search, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
 import { t } from '../i18n.js';
 import { api } from './client.js';
-import { errText, Empty, nf, ProgressBar, Spin, useAction } from './kit.jsx';
+import { errText, Empty, nf, NextBar, ProgressBar, Spin, useAction } from './kit.jsx';
 
-const STEPS = [['planning', 'Plan sources'], ['searching', 'Search the web'], ['screening', 'Screen candidates'], ['reading', 'Read documents'], ['extracting', 'Extract evidence'],
-  ['assets', 'Pick figures and tables'], ['collected', 'Evidence complete'], ['analysing', 'Analyse sections'], ['red-team', 'Cross-check the whole draft'], ['analysed', 'Done']];
+const STEPS = [['reading', 'Read your material'], ['extracting', 'Extract evidence'], ['planning', 'Plan the research'], ['searching', 'Search the web and sources'], ['screening', 'Screen new sources'],
+  ['gaps', 'Close the gaps'], ['assets', 'Look at pictures and charts'], ['collected', 'Evidence complete'], ['analysing', 'Analyse sections'], ['red-team', 'Cross-check the whole draft'], ['analysed', 'Done']];
 
-function Running({ c, onRetry, busy }) {
+function Running({ rid, c, onRetry, busy }) {
   const j = c.job; const p = j?.progress || {};
   const idx = Math.max(0, STEPS.findIndex(([k]) => k === p.step));
   const failed = j?.status === 'failed';
@@ -26,6 +26,7 @@ function Running({ c, onRetry, busy }) {
         {(p.log || []).length > 0 && <ul className="lv-log">{p.log.slice(-8).map((l, i) => <li key={i}>{l}</li>)}</ul>}
         {failed && <button className="btn primary" disabled={!!busy} onClick={onRetry}>{busy ? <Spin /> : <RefreshCw size={15} />} {t('Run again')}</button>}
       </div>
+      {!failed && <div className="card pad lv-run"><h2>{t('The research plan')}</h2><ResearchPlan rid={rid} live /></div>}
     </div>
   );
 }
@@ -136,6 +137,102 @@ function Sources({ rid }) {
   );
 }
 
+// ------------------------------------------------------------------------------------------ research plan
+const KIND_LABEL = { web: 'Web', files: 'Files', sharepoint: 'SharePoint', mail: 'Mail', teams: 'Teams', sap: 'SAP', jira: 'Jira', confluence: 'Confluence' };
+
+/** What the research planner decided for this topic, round by round, and what each round found. */
+export function ResearchPlan({ rid, live }) {
+  const [plan, setPlan] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.researchPlan(rid).then((p) => alive && setPlan(p)).catch(() => {});
+    load();
+    if (!live) return () => { alive = false; };
+    const id = setInterval(load, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, [rid, live]);
+  if (!plan) return <p className="muted"><Spin /></p>;
+  if (!plan.rounds.length) return live ? <p className="muted small"><Spin size={13} /> {t('The research planner is looking at your material…')}</p> : <Empty icon={<Search size={22} />} title={t('No research plan yet')} />;
+  return (
+    <div className="lv-plan-view">
+      {plan.web_notes.length > 0 && <div className="lv-banner warn"><AlertTriangle size={20} /><div><strong>{t('The web search did not deliver')}</strong><span>{/language model/i.test(plan.web_notes[plan.web_notes.length - 1] || '') ? t('Web research needs the language model. Configure the Foundry deployment in agents/.env and start the agents again.') : plan.web_notes[plan.web_notes.length - 1]}</span></div></div>}
+      {plan.rounds.map((r, i) => (
+        <section key={i} className="lv-round">
+          <h3>{r.mode === 'initial' ? t('Round {n}: plan for this topic', { n: r.round }) : t('Round {n}: close the gaps', { n: r.round })}</h3>
+          {r.strategy && <p className="lv-strategy">{r.strategy}</p>}
+          {r.needs?.length > 0 && (
+            <ul className="lv-needs-list">{r.needs.slice(0, 10).map((n, j) => (
+              <li key={j} className={n.covered ? 'covered' : ''}>{n.covered ? <Check size={13} /> : <Search size={13} />}<span>{n.question}</span>{n.where?.length > 0 && <span className="muted small">{n.where.map((w) => t(KIND_LABEL[w] || w)).join(', ')}</span>}</li>
+            ))}</ul>
+          )}
+          {r.queries?.length > 0 && (
+            <div className="lv-queries">{r.queries.map((q) => <span key={q.id} className="lv-q" data-kind={q.kind} title={q.why}>{q.kind === 'web' ? <Globe size={11} /> : <FileText size={11} />}<b>{t(KIND_LABEL[q.kind] || q.kind)}</b> {q.query}</span>)}</div>
+          )}
+          {r.result && (
+            <p className="muted small">{[r.result.evidence_own != null ? t('{n} findings from your material', { n: r.result.evidence_own }) : null, r.result.web_briefings ? t('{n} web briefings', { n: r.result.web_briefings }) : null,
+              r.result.web_pages ? t('{n} pages read in full', { n: r.result.web_pages }) : null, r.result.connector_hits ? t('{n} documents from connected systems', { n: r.result.connector_hits }) : null,
+              r.result.evidence_new != null ? t('{n} new findings', { n: r.result.evidence_new }) : null, r.result.enough ? t('Nothing more to search for.') : null].filter(Boolean).join(' · ')}</p>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ image library
+const ROLE_LABEL = { chart: 'Chart', diagram: 'Diagram', photo: 'Photo', screenshot: 'Screenshot', table_image: 'Table', scan: 'Scan', logo: 'Logo', decorative: 'Decoration', other: 'Picture' };
+
+function AssetCard({ a, rid, sections, reload, toast }) {
+  const [busy, run] = useAction(toast);
+  const set = (body) => run('p', async () => { await api.patchAsset(rid, a.id, body); await reload(); });
+  const on = a.chosen;
+  const treatment = a.treatment === 'redraw' && a.has_data ? t('redrawn as native chart') : a.treatment === 'discard' ? t('not usable') : '';
+  return (
+    <li className={`lv-asset${on ? ' on' : ''}${a.user_choice === 'skip' ? ' skip' : ''}`}>
+      <div className="lv-asset-pic">
+        {a.has_image ? <img src={api.assetUrl(rid, a.id)} alt={a.caption || ''} loading="lazy" />
+          : a.chart ? <div className="lv-asset-chart"><BarChart3 size={22} /><table><tbody>{a.chart.labels.slice(0, 5).map((l, i) => <tr key={i}><td>{l}</td><td>{a.chart.series.map((s) => s.values[i]).filter((v) => v != null).map((v) => nf(v)).join(' / ')}</td></tr>)}</tbody></table></div>
+            : a.table ? <div className="lv-asset-chart"><table><tbody>{a.table.slice(0, 4).map((r, i) => <tr key={i}>{r.slice(0, 3).map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody></table></div> : <ImageIcon size={24} />}
+      </div>
+      <div className="lv-asset-body">
+        <div className="lv-asset-top"><span className="pill">{t(ROLE_LABEL[a.role] || (a.kind === 'table' ? 'Table' : 'Picture'))}</span>
+          {a.origin === 'crop' && <span className="pill info">{t('cut out')}</span>}
+          {a.origin === 'web' && <span className="pill warn" title={a.rights || ''}>{t('web · check rights')}</span>}
+          {treatment && <span className="pill info">{treatment}</span>}
+          {a.used_on?.length > 0 && <span className="pill good">{t('on slide {n}', { n: a.used_on.join(', ') })}</span>}</div>
+        <strong className="lv-asset-cap">{a.caption || a.description || '—'}</strong>
+        {a.description && a.description !== a.caption && <p className="muted small">{a.description}</p>}
+        <div className="muted small">{[a.source, a.locator].filter(Boolean).join(' · ')}</div>
+        <div className="lv-asset-act">
+          <select className="lv-in" value={a.section_key || ''} onChange={(e) => set({ section_key: e.target.value, user_choice: 'use' })} aria-label={t('Section')}>
+            <option value="">{t('No section')}</option>{sections.map((s) => <option key={s.key} value={s.key}>{s.title}</option>)}</select>
+          {a.user_choice === 'skip' ? <button className="btn sm" disabled={!!busy} onClick={() => set({ user_choice: null })}>{t('Undo')}</button>
+            : <><button className={`btn sm${a.user_choice === 'use' ? ' primary' : ''}`} disabled={!!busy} onClick={() => set({ user_choice: a.user_choice === 'use' ? null : 'use' })}>{a.user_choice === 'use' ? <Check size={13} /> : null} {t('Use')}</button>
+              <button className="btn quiet sm" disabled={!!busy} onClick={() => set({ user_choice: 'skip' })}>{t('Skip')}</button></>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function ImageLibrary({ rid, sections, toast }) {
+  const [rows, setRows] = useState(null);
+  const [all, setAll] = useState(false);
+  const load = useCallback(() => api.assets(rid).then(setRows).catch(() => setRows([])), [rid]);
+  useEffect(() => { load(); }, [load]);
+  if (!rows) return <p className="muted"><Spin /></p>;
+  const shown = rows.filter((a) => all || a.treatment !== 'discard' || a.user_choice === 'use');
+  if (!rows.length) return <Empty icon={<ImageIcon size={22} />} title={t('No pictures, charts or tables found')}>{t('Pictures are cut out of PDFs, Word and PowerPoint files, e-mails and web pages; charts are read and redrawn.')}</Empty>;
+  const chosen = rows.filter((a) => a.chosen).length;
+  return (
+    <div className="lv-library">
+      <div className="lv-lib-head"><p className="muted">{t('{a} of {b} are proposed for slides. Charts with readable numbers are redrawn as editable charts; pictures are placed as they are. You decide: “Use” always shows it, “Skip” never.', { a: chosen, b: rows.filter((x) => x.treatment !== 'discard').length })}</p>
+        <label className="lv-check"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> {t('Show rejected too')}</label></div>
+      <ul className="lv-assets">{shown.map((a) => <AssetCard key={a.id} a={a} rid={rid} sections={sections} reload={load} toast={toast} />)}</ul>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------------------------------ the review
 function Findings({ rid, c, reload, toast, go }) {
   const [data, setData] = useState(null);
@@ -161,10 +258,12 @@ function Findings({ rid, c, reload, toast, go }) {
         <div className="lv-seg" role="tablist">
           <button role="tab" aria-selected={view === 'findings'} className={view === 'findings' ? 'on' : ''} onClick={() => setView('findings')}>{t('Findings')}</button>
           <button role="tab" aria-selected={view === 'sources'} className={view === 'sources' ? 'on' : ''} onClick={() => setView('sources')}>{t('Sources')} <b>{c.counts.sources}</b></button>
+          <button role="tab" aria-selected={view === 'images'} className={view === 'images' ? 'on' : ''} onClick={() => setView('images')}>{t('Pictures and charts')}</button>
+          <button role="tab" aria-selected={view === 'plan'} className={view === 'plan' ? 'on' : ''} onClick={() => setView('plan')}>{t('Research plan')}</button>
         </div>
       </div>
       {blockers > 0 && <div className="lv-banner warn"><AlertOctagon size={20} /><div><strong>{t('{n} blockers are open', { n: blockers })}</strong><span>{t('A blocker is a problem the checker found that would make a statement wrong or unsupported. Resolve each one, with a reason if you accept it.')}</span></div></div>}
-      {view === 'sources' ? <div className="card pad"><Sources rid={rid} /></div> : (
+      {view === 'sources' ? <div className="card pad"><Sources rid={rid} /></div> : view === 'images' ? <div className="card pad"><ImageLibrary rid={rid} sections={secs} toast={toast} /></div> : view === 'plan' ? <div className="card pad"><ResearchPlan rid={rid} /></div> : (
         <div className="lv-review">
           <nav className="lv-secnav card" aria-label={t('Sections')}>
             {(data.general_flags || []).length > 0 && <button className={sel === '_general' ? 'on' : ''} onClick={() => setSel('_general')}><AlertTriangle size={15} /> {t('General notes')} <b>{data.general_flags.filter((f) => f.status === 'open').length}</b></button>}
@@ -193,13 +292,11 @@ function Findings({ rid, c, reload, toast, go }) {
           </div>
         </div>
       )}
-      <div className="lv-actionbar">
-        <span className="muted small">{t('{a} of {b} claims approved', { a: c.counts.approved_claims, b: c.counts.claims })}</span>
-        <span className="grow" />
-        {editable && <button className="btn" disabled={!!busy} onClick={() => rerun(null)}><RefreshCw size={15} /> {t('Research everything again')}</button>}
+      <NextBar status={blockers > 0 ? t('{n} blockers are open', { n: blockers }) : t('{a} of {b} claims approved', { a: c.counts.approved_claims, b: c.counts.claims })}>
+        {editable && <button className="btn quiet" disabled={!!busy} onClick={() => rerun(null)}><RefreshCw size={15} /> {t('Research everything again')}</button>}
         {editable ? <button className="btn primary lg" disabled={!!busy || blockers > 0} onClick={approve} title={blockers ? t('Resolve the open blockers first') : ''}>{busy === 'approve' ? <Spin /> : <BadgeCheck size={17} />} {t('Approve findings and build slides')}</button>
           : <button className="btn lg" onClick={() => go('report')}>{t('To the report')}</button>}
-      </div>
+      </NextBar>
     </div>
   );
 }
@@ -207,7 +304,7 @@ function Findings({ rid, c, reload, toast, go }) {
 export default function LiveAnalysis({ rid, c, reload, toast, go }) {
   const [busy, run] = useAction(toast);
   const working = ['COLLECTING', 'ANALYSING'].includes(c.state) || (c.job?.kind === 'research' && c.job.status === 'failed' && ['COLLECTING', 'ANALYSING', 'OUTLINE_REVIEW'].includes(c.state));
-  if (working) return <Running c={c} busy={busy} onRetry={() => run('retry', async () => { await api.rerun(rid, null); await reload(); })} />;
+  if (working) return <Running rid={rid} c={c} busy={busy} onRetry={() => run('retry', async () => { await api.rerun(rid, null); await reload(); })} />;
   if (['SETUP', 'OUTLINE_REVIEW'].includes(c.state)) return <div className="lv-stage"><Empty icon={<Sparkles size={24} />} title={t('Nothing to check yet')}>{t('Approve the outline in the brief step to start the analysis.')}</Empty></div>;
   return <Findings rid={rid} c={c} reload={reload} toast={toast} go={go} />;
 }

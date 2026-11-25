@@ -10,7 +10,26 @@ from pathlib import Path
 
 from .parsers import SUPPORTED, kind_of, parse_bytes
 
-KINDS = ["files", "sharepoint", "mail", "teams", "sap"]
+KINDS = ["files", "sharepoint", "mail", "teams", "sap", "jira", "confluence"]
+# What each source kind is good for. The research planner reads this to decide, per topic, where to look. A new connector (a real
+# Jira or Confluence client, say) needs an entry here and a class with `available()`, `search()` and `fetch()`; nothing else changes.
+CATALOG = {
+    "files": {"label": "Uploaded files", "description": "Documents the author attached to this report: offers, protocols, presentations, spreadsheets, mails, scans.",
+              "query_style": "2-6 keywords in the documents' own vocabulary"},
+    "sharepoint": {"label": "SharePoint", "description": "Team sites and document libraries: previous committee papers, templates, offers, contracts, project documents, minutes.",
+                   "query_style": "document title words, project or supplier names, document types (Vorlage, Protokoll, Angebot)"},
+    "mail": {"label": "Mail", "description": "Mailbox: discussions, approvals, supplier correspondence, attachments sent around.", "query_style": "names, subject words, supplier or product"},
+    "teams": {"label": "Teams", "description": "Chats and channel posts: day-to-day coordination, informal decisions, open questions of the project team.",
+              "query_style": "project name, topic, person"},
+    "sap": {"label": "SAP", "description": "Booked costs, budgets, purchase orders, cost centres and other financial master and transaction data.",
+            "query_style": "cost centre, order, supplier, period"},
+    "jira": {"label": "Jira", "description": "Tickets, epics, status, owners, due dates, blockers, defects and sprint progress of the project: how far the work really is.",
+             "query_style": "project key, epic or component, status words (blocked, overdue), ticket topic"},
+    "confluence": {"label": "Confluence", "description": "Wiki pages: specifications, architecture and decision records, requirements, meeting notes, how-tos and project documentation.",
+                   "query_style": "page title words, space, decision or requirement topic"},
+    "web": {"label": "Public web", "description": "Everything outside the company: market data, benchmarks, competitors, suppliers, prices, technology, regulation, recent news.",
+            "query_style": "3-10 words with entity, metric and year, or one precise question"},
+}
 _WORD = re.compile(r"[^\W_]{3,}")
 
 
@@ -107,6 +126,75 @@ class WebFetcher:
         if ext and not name.lower().endswith(ext):
             name = (name if "." not in name else name.rsplit(".", 1)[0]) + ext
         return name, r.content
+
+    def page_images(self, html: bytes, base_url: str, limit: int = 6) -> list[dict]:
+        """The main pictures of a fetched HTML page (figures with captions first), downloaded with the same checks as pages.
+        Returns [{"data", "ext", "caption", "url"}]. Logos, icons, tracking pixels and tiny pictures are left out."""
+        from html.parser import HTMLParser
+        from urllib.parse import urljoin, urlparse
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.items: list[dict] = []
+                self._fig = None
+                self._cap = False
+
+            def handle_starttag(self, tag, a):
+                a = dict(a)
+                if tag == "figure":
+                    self._fig = {"caption": ""}
+                if tag == "figcaption":
+                    self._cap = True
+                if tag == "img":
+                    src = a.get("src") or (a.get("srcset", "").split(",")[0].strip().split(" ")[0] if a.get("srcset") else "") or a.get("data-src", "")
+                    if src and not src.startswith("data:"):
+                        self.items.append({"src": src, "alt": a.get("alt", ""), "w": a.get("width", ""), "h": a.get("height", ""), "fig": self._fig})
+                if tag == "meta" and a.get("property") == "og:image" and a.get("content"):
+                    self.items.append({"src": a["content"], "alt": "", "w": "", "h": "", "fig": None, "og": True})
+
+            def handle_endtag(self, tag):
+                if tag == "figure":
+                    self._fig = None
+                if tag == "figcaption":
+                    self._cap = False
+
+            def handle_data(self, data):
+                if self._cap and self._fig is not None:
+                    self._fig["caption"] += data
+
+        parser = P()
+        try:
+            parser.feed(html.decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001
+            return []
+        skip = re.compile(r"logo|icon|sprite|avatar|banner|tracking|pixel|spacer|button|badge|flag|emoji|\.svg($|\?)|\.gif($|\?)", re.I)
+        seen, out = set(), []
+        ranked = sorted(parser.items, key=lambda i: (0 if i["fig"] and i["fig"]["caption"].strip() else 1 if not i.get("og") else 2))
+        for it in ranked:
+            if len(out) >= limit:
+                break
+            url = urljoin(base_url, it["src"])
+            if url in seen or skip.search(url) or not url.lower().startswith(("http://", "https://")):
+                continue
+            seen.add(url)
+            try:
+                if (it["w"].isdigit() and int(it["w"]) < 250) or (it["h"].isdigit() and int(it["h"]) < 120):
+                    continue
+                self._check(url)
+                import httpx
+
+                r = httpx.get(url, timeout=self.timeout, follow_redirects=True, headers={"User-Agent": "COE4-Committee-Assistant/0.1"})
+                r.raise_for_status()
+                self._check(str(r.url))
+                ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                if not ctype.startswith("image/") or ctype in ("image/svg+xml", "image/gif") or not (12_000 <= len(r.content) <= 6_000_000):
+                    continue
+                cap = " ".join(((it["fig"] or {}).get("caption", "") or it["alt"]).split())[:200]
+                out.append({"data": r.content, "ext": {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(ctype, "jpg"), "caption": cap, "url": url, "host": urlparse(url).netloc})
+            except Exception:  # noqa: BLE001  a picture that cannot be fetched is skipped
+                continue
+        return out
 
     def _check(self, url: str) -> None:
         if not self.allow:

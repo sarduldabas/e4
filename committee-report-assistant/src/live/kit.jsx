@@ -60,3 +60,24 @@ export function ProgressBar({ done, total }) {
   const p = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
   return <div className="lv-bar" role="progressbar" aria-valuenow={p} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${p}%` }} /></div>;
 }
+
+/** The one place where the next step of a screen is offered: a bar fixed to the bottom with a short status on the left and the primary action on the right. */
+export function NextBar({ status, children }) {
+  return (
+    <div className="lv-actionbar" role="region" aria-label={t('Next step')}>
+      <span className="lv-nb-status">{status}</span>
+      <span className="grow" />
+      {children}
+    </div>
+  );
+}
+
+/** A numbered section of a guided screen. */
+export function Step({ n, title, hint, done, children, aside }) {
+  return (
+    <section className={`card lv-stepcard${done ? ' done' : ''}`}>
+      <header><span className="lv-stepno">{done ? '✓' : n}</span><div className="grow"><h2>{title}</h2>{hint && <p className="muted small">{hint}</p>}</div>{aside}</header>
+      <div className="lv-stepbody">{children}</div>
+    </section>
+  );
+}

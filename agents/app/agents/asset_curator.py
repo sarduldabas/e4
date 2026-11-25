@@ -20,7 +20,13 @@ class AssetCandidate(BaseModel):
     source_label: str = ""
     width: int | None = None
     height: int | None = None
-    data_url: str | None = None  # small preview (data:image/png;base64,...) for images; used by the vision model only
+    role: str = ""  # from the asset-analyst: chart | diagram | photo | screenshot | table_image | ...
+    description: str = ""  # what the asset-analyst saw
+    legibility: float | None = None
+    treatment: str = ""  # use | redraw | discard (the analyst's advice)
+    origin: str = ""  # document | web
+    has_data: bool = False  # chart data was read, so the chart can be redrawn natively
+    section_hints: list[str] = Field(default_factory=list)
 
 
 class AssetCuratorInput(BaseModel):
@@ -48,26 +54,18 @@ class AssetCurator(BaseAgent[AssetCuratorInput, AssetCuratorOutput]):
     id = "asset-curator"
     name = "Asset curator"
     stage = 2
-    tier = "vision"
-    description = "Picks the images and tables from the sources that fit a section, with a caption."
+    tier = "standard"
+    description = "Picks, from the catalogue of all images, charts and tables of the sources, those that fit a section, with a caption. Works on the analyst's descriptions, so every asset is considered."
     input_model = AssetCuratorInput
     output_model = AssetCuratorOutput
     system = """
-You choose visual material for the slides: images, tables and charts found in the sources.
-For each candidate decide: does it help a section tell its story to a committee? Choose at most "max_per_section" per section.
-Reject logos, decorative pictures, screenshots of menus, unreadable or low-resolution items (below 300 px wide) and anything
-that duplicates another choice. Give each choice a "caption" (short, factual, in the report language), a "score" 0..1 and a
-short "reason". Attached preview images are the actual pictures: look at them. Put all other candidate ids in "rejected"."""
-
-    def images(self, inp: AssetCuratorInput) -> list[str]:
-        return [c.data_url for c in inp.candidates if c.data_url][:8]
-
-    def _image_fields(self) -> set[str]:
-        return set()
-
-    def user_message(self, inp: AssetCuratorInput) -> str:
-        slim = inp.model_copy(update={"candidates": [c.model_copy(update={"data_url": None}) for c in inp.candidates]})
-        return slim.model_dump_json(exclude_none=True)
+You choose visual material for the slides from a catalogue of ALL images, charts and tables found in the sources. Each candidate has been
+looked at already: "role", "description", "legibility", the analyst's advice "treatment" and "has_data" (the chart's numbers are known and will be redrawn natively).
+Decide: does it help a section tell its story to a committee? Choose at most "max_per_section" per section.
+Prefer: charts and diagrams that carry the section's message, tables that compare options, photos or screenshots that show the real object.
+Reject: treatment "discard", logos, decoration, low legibility (< 0.4), duplicates of one another (keep the clearest), anything unrelated to the topic, and web pictures
+whose rights are unclear unless they are the only way to show the subject. Give each choice a "caption" (short, factual, in the report language), a "score" 0..1 and a
+short "reason". Put all other candidate ids in "rejected"."""
 
     def rules(self, inp: AssetCuratorInput) -> AssetCuratorOutput:
         sec = {s.key: tokens(s.title + " " + s.purpose) for s in inp.sections}
@@ -77,12 +75,15 @@ short "reason". Attached preview images are the actual pictures: look at them. P
         scored = []
         for c in inp.candidates:
             small = c.kind == "image" and c.width is not None and c.width < 300
-            t = tokens(c.caption + " " + c.context)
-            key, sc = max(((k, overlap(v, t)) for k, v in sec.items()), key=lambda kv: kv[1], default=(None, 0.0))
+            t = tokens(c.caption + " " + c.context + " " + c.description)
+            key, sc = max(((k, overlap(v, t) + (0.5 if k in c.section_hints else 0.0)) for k, v in sec.items()), key=lambda kv: kv[1], default=(None, 0.0))
+            if c.treatment == "discard" or (c.legibility is not None and c.legibility < 0.4) or c.role in ("logo", "decorative"):
+                rejected.append(c.id)
+                continue
             if small or not key or sc < 0.15:
                 rejected.append(c.id)
                 continue
-            scored.append((sc + (0.1 if c.kind == "table" else 0), key, c))
+            scored.append((sc + (0.1 if c.kind == "table" or c.role in ("chart", "diagram") else 0) - (0.1 if c.origin == "web" else 0), key, c))
         for sc, key, c in sorted(scored, key=lambda x: -x[0]):
             if taken.get(key, 0) >= inp.max_per_section:
                 rejected.append(c.id)

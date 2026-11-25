@@ -24,6 +24,20 @@ class Image:
     height: int | None
     caption: str
     locator: str
+    origin: str = "document"  # document | web
+    rights: str = ""  # where a web picture comes from (the right to use it must be checked)
+    context: str = ""  # text around it in the source
+
+
+@dataclass
+class ChartObj:
+    """A chart whose numbers are known exactly because the file stores them (PowerPoint charts)."""
+    locator: str
+    title: str
+    type: str  # column | bar | line | donut | stacked
+    unit: str
+    labels: list[str]
+    series: list[dict]  # {"name", "values"}
 
 
 @dataclass
@@ -49,6 +63,7 @@ class Parsed:
     chunks: list[Chunk] = field(default_factory=list)
     images: list[Image] = field(default_factory=list)
     tables: list[Table] = field(default_factory=list)
+    charts: list[ChartObj] = field(default_factory=list)
     title: str = ""
     meta: dict = field(default_factory=dict)  # author, dates, mail headers ...
     warnings: list[str] = field(default_factory=list)
@@ -62,8 +77,10 @@ class Parsed:
             self.chunks.append(Chunk(f"{prefix} › {c.locator}", c.text, f"{tag}:{c.ref}" if c.ref else None, c.flags))
         for t in child.tables:
             self.tables.append(Table(t.caption, t.rows, f"{prefix} › {t.locator}"))
+        for c in child.charts:
+            self.charts.append(ChartObj(f"{prefix} › {c.locator}", c.title, c.type, c.unit, c.labels, c.series))
         for im in child.images:
-            self.images.append(Image(im.data, im.ext, im.width, im.height, im.caption, f"{prefix} › {im.locator}"))
+            self.images.append(Image(im.data, im.ext, im.width, im.height, im.caption, f"{prefix} › {im.locator}", im.origin, im.rights, im.context))
         for v in child.vision:
             self.vision.append(VisionTask(f"{tag}:{v.key}", f"{prefix} › {v.locator}", v.image, v.reason, v.hint, v.existing_text))
         self.warnings += [f"{prefix}: {w}" for w in child.warnings]

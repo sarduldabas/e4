@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from .media import add_picture
-from .model import Chunk, Options, Parsed, Table
+from .model import ChartObj, Chunk, Options, Parsed, Table
 from .text import cell, clean, rows_to_text, split
 
 
@@ -156,6 +156,30 @@ def _chart_text(ch) -> str:
         return ""
 
 
+def _chart_obj(ch, locator: str) -> ChartObj | None:
+    """The numbers of a PowerPoint chart exactly as stored in the file."""
+    try:
+        title = ch.chart_title.text_frame.text.strip() if ch.has_title and ch.chart_title.has_text_frame else ""
+        plot = ch.plots[0]
+        labels = [str(c) for c in plot.categories]
+        ct = str(ch.chart_type).upper()
+        kind = "donut" if ("PIE" in ct or "DOUGHNUT" in ct) else "line" if "LINE" in ct else "stacked" if "STACKED" in ct else "bar" if "BAR" in ct and "COLUMN" not in ct else "column"
+        series = []
+        for s in plot.series:
+            vals = []
+            for v in s.values:
+                try:
+                    vals.append(None if v is None else float(v))
+                except (TypeError, ValueError):
+                    vals.append(None)
+            series.append({"name": str(s.name or ""), "values": vals})
+        if len(labels) < 2 or not series:
+            return None
+        return ChartObj(locator, title, kind, "", labels, series[:6])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def read_pptx(data: bytes, opts: Options | None = None) -> Parsed:
     from pptx import Presentation
 
@@ -184,6 +208,9 @@ def read_pptx(data: bytes, opts: Options | None = None) -> Parsed:
                 ct = _chart_text(sh.chart)
                 if ct:
                     items.append(ct)
+                obj = _chart_obj(sh.chart, f"Folie {n}")
+                if obj:
+                    p.charts.append(obj)
             if sh.shape_type == 13:
                 try:
                     pics += 1

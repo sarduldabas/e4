@@ -5,6 +5,7 @@ import copy
 
 from ..core.slides import build_pptx, claim_ids_of, normalise, numbers_not_in, parse_numbers, scrub, theme_of
 from ..core.slides.spec import block_numbers
+from . import assets as assets_svc
 from ..models import Asset, Calculation, Claim, Deck, Evidence, FileRow, Flag, Report, SectionDraft, Slide, Source
 from .ctx import Context, NotFound, StateError, current_claims, draft_of, get_report, log_event, outline, require_state
 from .numbers import allowed_numbers, section_numbers
@@ -261,7 +262,7 @@ def revise_slide(ctx: Context, rid: str, sid: str, instruction: str) -> dict:
         approved = [c for c in current_claims(s, rid, ver, None if key.startswith("_") else key, ("approved",))]
         d = draft_of(s, rid, key, ver) if not key.startswith("_") else None
         charts = d.charts if d else []
-        assets = s.query(Asset).filter_by(report_id=rid, section_key=key, chosen=True).all() if not key.startswith("_") else []
+        assets = assets_svc.slide_assets(s, rid, key) if not key.startswith("_") else []
         titles = [y.title for y in ordered(s, rid, ver) if y.id != sid][:30]
         payload = {"lang": lang, "topic": r.topic or r.title, "slide": x.spec, "instruction": instruction.strip()[:2000],
                    "claims": [{"id": c.id, "text": c.text, "kind": c.kind} for c in approved], "numbers": section_numbers(approved, led.ev, led.calcs, lang),
